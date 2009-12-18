@@ -1,0 +1,11 @@
+The file "usb_device.c" is part of the Microchip USB stack
+source code. In order to work with this version of my source,
+the file had to be changed to remove a line that resets the
+SOF flag (the flag has to be remain on until reset by my TMR1
+ISR code, check "tmr1_isr.asm" for details). Since the file
+"usb_device.c" is part of the stack, Microchip may come up
+with newer versions, so it felt not right to republish the
+whole thing here just for this slight change. Instead, I am
+providing a "diff -c" which is enough to patch the original
+version (either using "patch" or manually :-).
+

@@ -1,0 +1,36 @@
+This directory contains the following files and sub-directories:
+
+
+Source code:
+
+HardwareProfile.h		Definitions of I/O pins and other H/W details
+HardwareProfile.inc		Parts of the above, in ASM dialect (generated)
+main.c				Where "main" lives, from Microchip example code
+proslic.c			Functions related to 3210 ProSLIC
+proslic.h			Prototype definitions for "proslic.c"
+usb_config.h			Microchip USB stack set-up (tool-generated)
+usb_descriptors.c		USB descriptor data
+user.c				User functions (specific to Open USB FXS board)
+user.h				Defines and prototype definitions for "user.c"
+usb_device.c.patch		Patch to Microchip USB stack file "usb_device.c"
+usbdevice.c.README		A note on the above patch file
+tmr1_isr.asm			TMR1 ISR and initialization code (assembly)
+tmr1_isr.h			Prototype definitions for "tmr1_isr.asm"
+
+
+
+Necessary MPLAB IDE and other auxiliary files:
+
+CleanUp.bat			CMD script to clean up generated files
+OPENUSBFXS-FMWR.mcw		MPLAB IDE workspace (may need editing)
+OPENUSBFXS-FMWR.mcp		MPLAB IDE project files (hand-edit file paths)
+mkHardwareProfile_inc.sh	Creates (not auto) "HardwareProfile.inc" from
+				"HardwareProfile.h"; requires Bourne-like shell
+18f2550.lkr			C18 Linker script
+Objects				MPLAB IDE directory to place .o files
+
+
+
+Flash-ready code (requires PICDEM FS USB flash tool to program PIC):
+
+OPENUSBFXS-FMWR.hex		Generated code in HEX format

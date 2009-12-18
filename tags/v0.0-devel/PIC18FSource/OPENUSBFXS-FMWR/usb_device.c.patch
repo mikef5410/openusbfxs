@@ -1,0 +1,19 @@
+*** usb_device.c	Tue May  5 13:17:20 2009
+--- usb_device.c.org	Fri Jun 19 08:07:59 2009
+***************
+*** 370,376 ****
+      if(USBSOFIF && USBSOFIE)
+      {
+          USBCB_SOF_Handler();    // Required callback, see usbcallbacks.c
+!         // USBClearInterruptFlag(USBSOFIFReg,USBSOFIFBitNum);
+      }
+  
+      if(USBStallIF && USBStallIE)
+--- 370,376 ----
+      if(USBSOFIF && USBSOFIE)
+      {
+          USBCB_SOF_Handler();    // Required callback, see usbcallbacks.c
+!         USBClearInterruptFlag(USBSOFIFReg,USBSOFIFBitNum);
+      }
+  
+      if(USBStallIF && USBStallIE)
