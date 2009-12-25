@@ -45,6 +45,7 @@ file_018=USB Stack
 file_019=.
 file_020=.
 file_021=.
+file_022=.
 [GENERATED_FILES]
 file_000=no
 file_001=no
@@ -68,6 +69,7 @@ file_018=no
 file_019=no
 file_020=no
 file_021=no
+file_022=no
 [OTHER_FILES]
 file_000=no
 file_001=no
@@ -91,6 +93,7 @@ file_018=no
 file_019=no
 file_020=no
 file_021=no
+file_022=no
 [FILE_INFO]
 file_000=user.c
 file_001=main.c
@@ -113,7 +116,8 @@ file_017=C:\Program Files\Microchip\Microchip Solutions\Microchip\Include\USB\us
 file_018=C:\Program Files\Microchip\Microchip Solutions\Microchip\Include\USB\usb_hal.h
 file_019=tmr1_isr.h
 file_020=proslic.h
-file_021=18f2550.lkr
+file_021=pcmpacket.h
+file_022=18f2550.lkr
 [SUITE_INFO]
 suite_guid={5B7D72DD-9861-47BD-9F60-2BE967BF8416}
 suite_state=

@@ -12,6 +12,7 @@
 		am placing under copyright.
  Copyright:	(sections marked with "avarvit") (C) Angelos Varvitsiotis 2009
  License:	GPLv3 (copyrighted part)
+ $Id$
 
 *********************************************************************
 -usb_descriptors.c-
@@ -162,8 +163,11 @@ ROM USB_DEVICE_DESCRIPTOR device_dsc=
     // and product ids as Microchip's PICDEM FS board (that board has two
     // modes, bootloader and demo mode). There is no reason for this (other
     // than lazyness) and this will be definitely corrected in the future
-    0x04D8,                 // Vendor ID
-    0x000C,                 // Product ID: PICDEM FS USB (DEMO Mode)
+    0x04D8,                 // Vendor ID (Microchip)
+    0xFCF1,                 // Product ID (OpenUSBFXS, sublicensed by Microchip)
+    // If in doubt, you may change this the PID with 0x000C below and
+    // see if the PICDEM tool recognizes the board
+    // 0x000C,                 // Product ID: PICDEM FS USB (DEMO Mode)
 //////////////// END contributed code by avarvit
     0x0001,                 // Device release number in BCD format
     0x01,                   // Manufacturer string index
@@ -263,33 +267,17 @@ ROM BYTE configDescriptor1[]={
 ROM struct{BYTE bLength;BYTE bDscType;WORD string[1];}sd000={
 sizeof(sd000),USB_DESCRIPTOR_STRING,{0x0409}};
 
-//////////////// BEGIN contributed code by avarvit
-/*
-  Note: for the time being, I have not changed the vendor and product
-  strings below and I have kept Microchip's values. This is definitely
-  not the right thing, and vendor/product strings will have to be
-  supplied at a later stage. As a byproduct of this (intentional) error,
-  the PICDEM FS tool (in demo mode) is able to recognize the Open USB
-  FXS board as a PICDEM board, report its firmware version and reset it
-  (other PICDEM functions either are inapplicable -- e.g., my board does
-  not have a temperature meter -- or have been removed on purpose -- e.g.
-  functions that report back the status of user switches).
-*/
-
-//////////////// END contributed code by avarvit
-
 //Manufacturer string descriptor
-ROM struct{BYTE bLength;BYTE bDscType;WORD string[25];}sd001={
-sizeof(sd001),USB_DESCRIPTOR_STRING,
-{'M','i','c','r','o','c','h','i','p',' ',
-'T','e','c','h','n','o','l','o','g','y',' ','I','n','c','.'
+ROM struct{BYTE bLength;BYTE bDscType;WORD string[20];}sd001={
+sizeof(sd001),USB_DESCRIPTOR_STRING,{
+'A','n','g','e','l','o','s',' ','V','a','r','v','i','t','s','i','o','t','i','s'
 }};
 
 //Product string descriptor
-ROM struct{BYTE bLength;BYTE bDscType;WORD string[27];}sd002={
-sizeof(sd002),USB_DESCRIPTOR_STRING,
-{'M','i','c','r','o','c','h','i','p',' ','C','u','s','t','o','m',
-' ','U','S','B',' ','D','e','v','i','c','e'}};
+ROM struct{BYTE bLength;BYTE bDscType;WORD string[18];}sd002={
+sizeof(sd002),USB_DESCRIPTOR_STRING,{
+'O','p','e','n',' ','U','S','B',' ','F','X','S',' ','b','o','a','r','d'
+}};
 
 //Array of configuration descriptors
 ROM BYTE *ROM USB_CD_Ptr[]=
