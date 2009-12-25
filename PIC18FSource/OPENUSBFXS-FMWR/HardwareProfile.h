@@ -54,9 +54,10 @@
 
 /** 3210 SPI Chip Select, Reset and PCM bus Lines ******************/
 
-// 3210 chip select and reset lines
+// 3210 \chip select, \reset and \int lines
 #define tris__cs_3210		TRISBbits.TRISB3	// output pin, set to 0
 #define tris__reset_3210	TRISAbits.TRISA0	// output pin, set to 0
+#define tris__int_3210		TRISCbits.TRISC2	// input pin, set to 1
 
 // PCM bus lines (PCLK, DRX, DTX, FSYNC)
 #define tris_pcm_3210_pclk	TRISAbits.TRISA4	// output pin, set to 0
@@ -66,11 +67,12 @@
 
 // define handy signal names here
 
+#define _reset_3210		LATAbits.LATA0
 #define	_cs_3210		LATBbits.LATB3
+#define	_int_3210		PORTCbits.RC2
 #define pcm_3210_pclk		LATAbits.LATA4
 #define pcm_3210_drx		LATAbits.LATA3
 #define pcm_3210_dtx		PORTAbits.RA2
 #define pcm_3210_fsync		LATAbits.LATA1
-#define _reset_3210		LATAbits.LATA0
 
 #endif  //HARDWARE_PROFILE_H

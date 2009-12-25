@@ -71,6 +71,10 @@ WORD_VAL ReadPOT(void);
 void ServiceRequests(void);
 
 /** D E C L A R A T I O N S **************************************************/
+#pragma udata
+extern BYTE pauseIO, cnt4, cnt8, passout, pasHout, hkdtmf;
+#pragma code
+
 #pragma code
 void UserInit(void) {
 //////////////// BEGIN contributed code by avarvit
@@ -81,6 +85,7 @@ void UserInit(void) {
 
     tris__cs_3210	= OUTPUT_PIN;	// \CS signal, from PIC to 3210
     tris__reset_3210	= OUTPUT_PIN;	// \RESET signal, from PIC to 3210
+    tris__int_3210	= INPUT_PIN;	// \INT signal, from 3210 to PIC
 
     tris_pcm_3210_pclk	= OUTPUT_PIN;	// PCLK signal, from PIC to 3210
     tris_pcm_3210_drx	= OUTPUT_PIN;	// DRX signal, from PIC to 3210
@@ -138,7 +143,8 @@ void UserInit(void) {
       // (clock polarity set to idle state high) as required by the 3210, p.53
       // notice also that the 3210 seems to be asserting both its input and its
       // output on rising clock edge, so SMPMID should be OK
-    OpenSPI (SPI_FOSC_16, MODE_11, SMPMID);
+    // OpenSPI (SPI_FOSC_16, MODE_11, SMPMID);
+    OpenSPI (SPI_FOSC_4, MODE_11, SMPMID);
 
     mInitAllLEDs();
     mInitAllSwitches();
@@ -146,9 +152,14 @@ void UserInit(void) {
     
     // setup tmr0 (enabled by default)
     T0CON = 0b10010111;
+
+    // set the ISR function to transmit data
+    pauseIO = 0;
+
+    // set hkdtmf to a known value
+    hkdtmf = 0;
 //////////////// END contributed code by avarvit
 }//end UserInit
-
 
 /******************************************************************************
  * Function:        void ProcessIO(void)
@@ -168,9 +179,48 @@ void UserInit(void) {
  *****************************************************************************/
 void ProcessIO(void)
 {   
+    // Si3210 interrupt status registers
+    BYTE DR19, DR20, DR68, DR24;
     BlinkUSBStatus();
     // User Application USB tasks
     if((USBDeviceState < CONFIGURED_STATE)||(USBSuspendControl==1)) return;
+
+    /*
+    // TMR3 runs at Fosc/4 = 12MHz; it cycles through about every 5 ms
+    if (TMR3L > 128) {	// hopefully, this will occur once every now and then
+	if (TMR3H == 0) {
+	    hkdtmf = ReadProSLICDirectRegister (24) |
+		    ((ReadProSLICDirectRegister (68) & 0x01) << 7);
+	}
+    }
+    */
+    if (!_int_3210) {
+	// interrupts (should) occur only on hook state changes or DTMF detect
+
+	// check for hook state
+	DR19 = ReadProSLICDirectRegister (19);
+	if (DR19) {
+	    WriteProSLICDirectRegister (19, DR19);	// clears interrupt
+	    if (DR19 & 0x02) {				// hook state changed
+	        DR68 = ReadProSLICDirectRegister (68);
+		if (DR68 & 0x01) {			// phone is off-hook
+		    hkdtmf |= 0x80;			// set or clear bit 7
+		}
+		else {
+		    hkdtmf &= 0x7F;			
+		}
+	    }
+	}
+	DR20 = ReadProSLICDirectRegister (20);
+	if (DR20) {					
+	    WriteProSLICDirectRegister (20, DR20);	// clears interrupt
+	    if (DR20 & 0x01) {				// DTMF event
+	        DR24 = ReadProSLICDirectRegister (24);	// get DTMF state
+		hkdtmf &= 0xe0;				// forget previous state
+		hkdtmf |= (DR24 & 0x1f);		// mask into hkdtmf
+	    }
+	}
+    }
 
     //respond to any USB commands that might have come over the bus
     ServiceRequests();
@@ -194,11 +244,6 @@ void ProcessIO(void)
  *                  application and executes the commands requested
  * Note:            None
  *****************************************************************************/
-#pragma udata
-extern BYTE pauseIO;
-
-extern BYTE cnt4, cnt8, passout, pasHout;
-#pragma code
 void ServiceRequests(void) {
     BYTE index;
     WORD indval;
@@ -297,27 +342,27 @@ void ServiceRequests(void) {
 		counter = 0x04;
 		break;
 
-	    case 0x7E:
+	    case START_STOP_ISO:
 		if (OUTPacket._byte[1]) {
 		    pauseIO = 0xFF;
 		}
 		else {
-		    IN_PCMData0[0] = 0xBA;	// magic number
-		    IN_PCMData1[0] = 0xBA;	// magic number
-		    IN_PCMData0[1] = 0xBE;
-		    IN_PCMData1[1] = 0xBE;
-		    IN_PCMData0[2] = 0xEE;	// even
-		    IN_PCMData1[2] = 0xDD;	// odd
-		    IN_PCMData0[3] = 0;
-		    IN_PCMData1[3] = 0;
-		    IN_PCMData0[4] = 0;
-		    IN_PCMData1[4] = 0;
-		    IN_PCMData0[5] = 0;
-		    IN_PCMData1[5] = 0;
-		    IN_PCMData0[6] = 0;
-		    IN_PCMData1[6] = 0;
-		    IN_PCMData0[7] = 0;
-		    IN_PCMData1[7] = 0;
+		    IN_PCMData0[0] = 0xBA;	// magic number (low), even pck
+		    IN_PCMData1[0] = 0xBA;	// magic number (low), odd pck
+		    IN_PCMData0[1] = 0xEE;	// magic number (high)
+		    IN_PCMData1[1] = 0xDD;	// magic number (high)
+		    IN_PCMData0[2] = 0;		// DTMF and hook state
+		    IN_PCMData1[2] = 0;		// DTMF and hook state
+		    IN_PCMData0[3] = 0;		// USB_DEBUG?mirrored serial OUT
+		    IN_PCMData1[3] = 0;		// USB_DEBUG?mirrored serial OUT
+		    IN_PCMData0[4] = 0;		// (unused on even packets)
+		    IN_PCMData1[4] = 0;		// USB_DEBUG? TMR3L
+		    IN_PCMData0[5] = 0;		// (unused on even packets)
+		    IN_PCMData1[5] = 0;		// USB_DEBUG? TMR3H
+		    IN_PCMData0[6] = 0;		// (ubused on even packets)
+		    IN_PCMData1[6] = 0;		// # of OUT non-receipts
+		    IN_PCMData0[7] = 0;		// own serial (even packets)
+		    IN_PCMData1[7] = 0;		// own serial (odd packets)
 		    OUTPCMData0[8]  = 0xFF;
 		    OUTPCMData0[9]  = 0xFF;
 		    OUTPCMData0[10] = 0xFF;
@@ -335,8 +380,8 @@ void ServiceRequests(void) {
 		    OUTPCMData1[14] = 0xFF;
 		    OUTPCMData1[15] = 0xFF;
 
-		    pauseIO = 0x00;
-		    passout = 0x00;
+		    pauseIO = 0x00;		// don't pause PCM IO
+		    passout = 0x00;		// reset debug value
 		}
 
 

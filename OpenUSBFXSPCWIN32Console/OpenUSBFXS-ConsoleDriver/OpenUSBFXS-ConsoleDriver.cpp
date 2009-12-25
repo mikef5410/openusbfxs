@@ -12,8 +12,10 @@
 #include "oufxsbrdcodes.h"	// codes for communicating with the open usb fxs board
 
 // Open USB FXS device VID and PID (currently, Microchip's, they must change)
-#define Device_VID	0x04d8
-#define Device_PID	0x000c
+#define Device_VID	0x04d8	// Microchip's VID
+#define Device_PID	0xfcf1	// OpenUSBFXS PID, sub-licensed by Microchip
+// This used to be 0x000c, same as the PICDEM board
+// #define Device_PID	0x000c
 
 // Endpoints used
 #define EP1OUTHandle	0x01
@@ -305,19 +307,6 @@ bool WriteAndShowDR (unsigned char reg, unsigned int *RetVal, unsigned int NewVa
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 void SendAudioFile (LPCWSTR filename) {
 	struct _stat st;
 	int f;
@@ -418,6 +407,7 @@ void SendAudioFile (LPCWSTR filename) {
 	usb_submit_async (wctx2, (char *)wbuf2, sizeof (wbuf2));
 
 	unsigned char *wbp = wbuf1;
+	unsigned char *rbp = rbuf1;
 	void **r = &rctx1;
 	void **w = &wctx1;
 	int rofs, wofs;
@@ -427,9 +417,6 @@ void SendAudioFile (LPCWSTR filename) {
 			rofs = usb_reap_async_nocancel (*r, IBSZ/16);
 			wofs = usb_reap_async_nocancel (*w, IBSZ/16);
 			if (wofs < 0) {
-				if (wofs == -116) { // timeout?
-					continue;
-				}
 				RegValue = -wofs;
 				Sleep (5000);
 				goto outahere;
@@ -457,7 +444,7 @@ void SendAudioFile (LPCWSTR filename) {
 			// usb_isochronous_setup_async (UsbDevInstance, r, EP2INHandle,  16);
 			usb_isochronous_setup_async (UsbDevInstance, w, EP2OUTHandle, 16);
 			
-			memset (wbp, 0, sizeof(rbuf1));
+			memset (wbp, 0, sizeof(wbuf1));
 			for (unsigned char *q = wbp + 3; q - wbp < sizeof (wbuf1); q += 16) *q = seq++;
 			for (unsigned char *q = wbp + 8; q - wbp < sizeof (wbuf1);) {
 				for (int j = 0; j < 8; j++) {
@@ -469,15 +456,17 @@ void SendAudioFile (LPCWSTR filename) {
 				q += 8;
 			}
 
-			usb_submit_async (*r, (char *)rbuf1, sizeof (rbuf1));
+			usb_submit_async (*r, (char *)rbp, sizeof (rbuf1));
 			usb_submit_async (*w, (char *)wbp, sizeof (wbuf1));
 			if (wbp == wbuf1) {
 				wbp = wbuf2;
+				rbp = rbuf2;
 				r = &rctx2;
 				w = &wctx2;
 			}
 			else {
 				wbp = wbuf1;
+				rbp = rbuf1;
 				r = &rctx1;
 				w = &wctx1;
 			}
@@ -502,26 +491,6 @@ outahere:
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 int _tmain(int argc, _TCHAR* argv[])
 {
 
@@ -530,7 +499,7 @@ usb_not_detected:
 	UsbDevInstance = NULL;
 	while ((UsbDevInstance = LibUSBGetDevice (Device_VID, Device_PID)) == NULL) {
 		printf ("No OpenUSBFXS device detected, waiting...\n");
-		Sleep (1000);
+		Sleep (2000);
 	}
 	printf ("OpenUSBFXS device found!\n");
 	RegValue = 0;
@@ -702,7 +671,6 @@ start_over:
 	ShowDirectRegisters ();
 
 	printf ("OpenUSBFXS Driver: bringing up DC-DC converter...\n");
-	printf ("3\n"); Sleep (1000); printf ("2\n"); Sleep (1000); printf ("1\n"); Sleep (1000);
 
 	// DR 14 <- 0 : this should bring the DC-DC converter up
 	if (!WriteAndShowDR (14, &RegValue, 0, false)) goto start_over;
@@ -714,7 +682,7 @@ start_over:
 		if (!ReadPROSLICDirectRegister (82, &RegValue, -1)) goto start_over;
 		RegValue = RegValue * 376 / 1000;
 		if (RegValue >= 60) break;
-		printf ("Waiting for DC-DC converter to come up (iteration %d of 10)\n", i + 1);
+		printf ("Waiting for DC-DC converter to come up (iteration %d of 10, measured %d volts)\n", i + 1, RegValue);
 	}
 	printf ("DC-DC converter output: %d volts\n", RegValue);
 	// if VBAT is not OK, signal we failed and loop over
@@ -815,10 +783,17 @@ start_over:
 	for (unsigned char ir = 193; ir <= 211; ir++) {
 		if (!WritePROSLICIndirectRegister (ir, &RegValue, 0, true)) goto start_over;
 	}
-	// enable and clear interrupts
-	for (unsigned char i = 19; i <= 23; i++) {
-		if (!WriteAndShowDR (i, &RegValue, 0xFF, true)) goto start_over;
-	}
+	// clear all pending interrupts while no interrupts are enabled
+	if (!WriteAndShowDR (18, &RegValue, 0xFF, true)) goto start_over;
+	if (!WriteAndShowDR (19, &RegValue, 0xFF, true)) goto start_over;
+	if (!WriteAndShowDR (20, &RegValue, 0xFF, true)) goto start_over;
+	// enable selected interrupts
+	if (!WriteAndShowDR (21, &RegValue, 0x00, true)) goto start_over; // none here
+	if (!WriteAndShowDR (22, &RegValue, 0xFF, true)) goto start_over; // all here
+	if (!WriteAndShowDR (23, &RegValue, 0x01, true)) goto start_over; // only DTMF here
+	//for (unsigned char i = 19; i <= 23; i++) {
+	//	if (!WriteAndShowDR (i, &RegValue, 0xFF, true)) goto start_over;
+	//}
 	// write DRs 2-5 (PCM clock slots)
 	for (unsigned char i = 2; i <= 5; i++) {
 		if (!WriteAndShowDR (i, &RegValue, 0, false)) goto start_over;

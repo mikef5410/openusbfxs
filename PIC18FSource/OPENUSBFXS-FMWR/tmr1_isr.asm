@@ -8,18 +8,23 @@
 
 #include p18f2550.inc
 #include HardwareProfile.inc
+#include "pcmpacket.h"
 
 ; Various debugging-related defines follow
 
 ; If defined, causes the serial number of OUT packets to be
-; mirrored into IN packets, and the 16-bit value of TMR3 to
-; be also included into IN packets; it is useful for debugging
-; timing and sequencing issues
-#define DEBUG_USB
+; mirrored into IN packets
+#define DEBUG_USB_SERIAL
 
-; if defined, causes the full contents of OUT packets to be
-; mirrored back into IN packets; quirks by DEBUG_USB are
-; overwritten
+; If defined, causes the 16-bit value of TMR3 to be included
+; into IN packets; this is very useful when debugging timing
+; and sequencing issues.
+; NOTE: !!!! in order that the board returns DTMF and hook
+; status with PCM data, this needs to be undefined!!
+;;;;;;#define DEBUG_USB_TMR3
+
+; if defined, causes the IN packets to use the same buffers
+; as OUT packets, essentially mirroring back all data received
 ;;;;;;#define DEBUG_PCM_MIRROR
 
 ; DEBUG_USB_NO_OUT, if defined, causes isochronous OUT
@@ -43,9 +48,7 @@
 
 ; Defining DEBUG_LOST_OUT causes a field within IN_PCMData1 to be
 ; incremented once for every lost OUT packet
-#ifdef PCM_SILENCE
 #define DEBUG_LOST_OUT
-#endif
 
 
 ; Labels for external addresses
@@ -88,6 +91,7 @@ EP2OOST	EQU	0x424
 	GLOBAL		pasHout		; a debug return value (for WORDs)
 	GLOBAL		pauseIO		; pause USB I/O
 	GLOBAL		inisync		; intial SOF sync
+	GLOBAL		hkdtmf		; hook and DTMF status
 
 	; these are exposed ONLY for debugging, they should not
 	; be touched from the outside world, or bad things will
@@ -128,6 +132,10 @@ ppindex	RES		1		; index (incl. ping-pong offset); this
 					; ranges from 8..15 for even ping-pong
 					; buffer state and from 24..31 for odd
 					; state
+
+outodev	RES		1		; points to appropriate BD for even/odd
+					; OUT
+
 pauseIO	RES		1		; flags whether we should do USB I/O
 
 
@@ -148,14 +156,13 @@ cnt4	RES		1		; counts 4x8 invocations
 passout	RES		1		; variable to pass out debugging info
 pasHout	RES		1		; variable to pass out debugging info
 inisync	RES		1		; variable for doing initial SOF sync
+hkdtmf	RES		1		; set in user.c, holds hook/DTMF status
 
 	; temporary storage for FSR1's value
 sfsr1l	RES		1		; FSR1L temp save space
 sfsr1h	RES		1		; FSR1H temp save space
 sfsr2l	RES		1		; FSR2L temp save space
 sfsr2h	RES		1		; FSR2H temp save space
-
-
 
 
 ; TMR1 service interrupt routine
@@ -664,7 +671,7 @@ nosyncevn					; T:@+29
 
 						; T:@+32
 
-	INCF		IN_PCMData0+7,BANKED	; C:1
+	INCF		IN_EVN_SERIAL,BANKED	; C:1
 	NOP					; C:1
 
 						; T:@+34
@@ -740,13 +747,16 @@ usbIN_odd					; T:@+27
 
 						; T:@+30
 
-      #ifdef DEBUG_USB
-        MOVFF		TMR3L, IN_PCMData1+4	; C:2
-        MOVFF		TMR3H, IN_PCMData1+5	; C:2
+      #ifdef DEBUG_USB_TMR3
+	; pass current TMR3 value in odd packets; this is a very useful
+	; tool to help make sure that timing is 100% OK;
+	; 
+        MOVFF		TMR3L, IN_ODD_TMR3LV	; C:2
+        MOVFF		TMR3H, IN_ODD_TMR3HV	; C:2
       #else
-	INCF		IN_PCMData1+7, BANKED	; C:1
-	NOP					; C:1
-	NOP					; C:1
+        ; increment current odd-packet serial # and pass DTMF/hook status
+	INCF		IN_ODD_SERIAL, BANKED	; C:1
+	MOVFF		hkdtmf, IN_ODD_HKDTMF	; C:2
 	NOP					; C:1
       #endif
 
@@ -814,8 +824,7 @@ fourthof4					; T:@+18
 	BTFSC		ppindex, 3, BANKED	; C:1/2
 	BRA		fo4noovfl		; C:2
 
-						; T:@+20
-
+; FIXME: FIXDOC HERE
 ;	Here again, we must re-initiate a read for either OUTPCMData0
 ;	or OUTPCMData1, using the BD at address either 0x424 or 0x428
 ;	respectively, depending on the ping-pong phase. If bit 4 of
@@ -825,9 +834,9 @@ fourthof4					; T:@+18
 ;	that we have just finished sending OUTPCMData1 to the 3210
 ;	and we may arm a USB receive for data to fill that.
 
-	; task (ii): distinguish if we are to do an even or an odd ping-pong
-	; receive
-	BTFSS		ppindex, 4, BANKED	; C:1/2
+						; T:@+20
+
+	BTFSC		outodev, 0, BANKED	; C:1/2
 	BRA		usbOUTodd		; C:2
 
 	; (following label is just for clarity, there's not any jump into it)
@@ -846,10 +855,10 @@ usbOUTevn					; T:@+22
 	; task (v) case a: check even BD's UOWN flag to see if I/O is ready
 	BTFSC		EP2OEST, 7, BANKED	; C:1/2 check UOWN bit (bit is
 						;	zero if I/O is finished)
-	BRA		usbOUTevnNoData		; C:2
+	BRA		usbOUTNoData27		; C:2
 
 						; T:@+26
-
+	
 #ifdef DEBUG_USB_NO_OUT
 	SETF		TMR1H, ACCESS		; C:1 set TMR1H to 0xFF
 	MOVLW		245			; C:1 next interrupt at @+46-5
@@ -863,31 +872,33 @@ usbOUTevn					; T:@+22
 	MOVLW		HIGH OUTPCMData0	; C:1 bank part of OUTPCMData0
 	MOVWF		EP2OEAH, BANKED		; C:1 store it in BD
 	MOVLW		LOW  OUTPCMData0	; C:1 offset part of OUTPCMData0
+	BTFSC		ppindex, 4, BANKED	; C:1 if ppindex->OUTPCMData0,
+	BSF		WREG, 4, ACCESS		; C:1 change it to OUTPCMData1 
 	MOVWF		EP2OEAL, BANKED		; C:1 store it in BD
 	MOVLW		0x10			; C:1 packet length, 16
 	MOVWF		EP2OECN, BANKED		; C:1 store it in BD
 	MOVLW		0x40			; C:1 just keep the DTS bit
 	ANDWF		EP2OEST, BANKED		; C:1 
 	MOVLW		0x88			; C:1 set UOWN and DTSEN bits
-	IORWF		EP2OEST, BANKED		; C:1 that's it, packet queued!
+	IORWF		EP2OEST, BANKED		; C:1 that's it, receive armed!
 
-						; T:@+36
+						; T:@+38
 
+	; task (vii): toggle outodev (next time do an odd OUT)
 
-	; here, if we arm TMR1 and return, we 'll hit userspace just as
-	; TMR1->0; in this case, the PIC always executes one userspace
-	; instruction, so we 'll drift by 1TCy; thus, the right thing to
-	; do is to wait until it's time and then loop over to the start
-      #ifdef DEBUG_USB
+	BTG		outodev, 0, BANKED	; C:1
+
+						; T:@+39
+
+	; it's too late to return, so wait until it's time and then restart
+      #ifdef DEBUG_USB_SERIAL
 	; copy serial from last OUT into next IN packet
-      	MOVFF		OUTPCMData1+3,IN_PCMData1+3
+      	MOVFF		OUTPCMData1+3,IN_ODD_MOUTSN
+						; C:2
       #else
 	NOP					; C:1
 	NOP					; C:1
       #endif
-	NOP					; C:1
-	NOP					; C:1
-	NOP					; C:1
 	NOP					; C:1
 	NOP					; C:1
 	NOP					; C:1
@@ -912,7 +923,7 @@ usbOUTodd					; T:@+23
 	; task (v) case b: check odd BD's UOWN flag to see if I/O is ready
 	BTFSC		EP2OOST, 7, BANKED	; C:1/2 check UOWN bit (bit is
 						;	zero if I/O is finished)
-	BRA		usbOUToddNoData		; C:2
+	BRA		usbOUTNoData28		; C:2
 
 						; T:@+27
 
@@ -925,30 +936,36 @@ usbOUTodd					; T:@+23
 #else
 
 	; task (vi) case b: arm a receive to prepare receiving the odd BD
-	MOVLW		HIGH OUTPCMData1	; C:1 bank part of OUTPCMData1
+	MOVLW		HIGH OUTPCMData0	; C:1 bank part of OUTPCMData0
 	MOVWF		EP2OOAH, BANKED		; C:1 store it in BD
-	MOVLW		LOW  OUTPCMData1	; C:1 offset part of OUTPCMData1
+	MOVLW		LOW  OUTPCMData0	; C:1 offset part of OUTPCMData0
+	BTFSC		ppindex, 4, BANKED	; C:1 if ppindex->OUTPCMData0,
+	BSF		WREG, 4, ACCESS		; C:1 change it to OUTPCMData1 
 	MOVWF		EP2OOAL, BANKED		; C:1 store it in BD
 	MOVLW		0x10			; C:1 packet length, 16
 	MOVWF		EP2OOCN, BANKED		; C:1 store it in BD
 	MOVLW		0x40			; C:1 just keep the DTS bit
 	ANDWF		EP2OOST, BANKED		; C:1 
 	MOVLW		0x88			; C:1 set UOWN and DTSEN bits
-	IORWF		EP2OOST, BANKED		; C:1 that's it, packet queued!
+	IORWF		EP2OOST, BANKED		; C:1 that's it, receive armed!
 
-						; T:@+37
+						; T:@+39
+
+	; task (vii): toggle outodev (next time do an odd OUT)
+
+	BTG		outodev, 0, BANKED	; C:1
+
+						; T:@+40
 	
-	; it' too late to return, so wait until it's time and then restart
-      #ifdef DEBUG_USB
+	; it's too late to return, so wait until it's time and then restart
+      #ifdef DEBUG_USB_SERIAL
 	; copy serial from last OUT into next IN packet
-      	MOVFF		OUTPCMData0+3,IN_PCMData0+3
+      	MOVFF		OUTPCMData0+3,IN_EVN_MOUTSN
+						; C:2
       #else
 	NOP					; C:1
 	NOP					; C:1
       #endif
-	NOP					; C:1
-	NOP					; C:1
-	NOP					; C:1
 	NOP					; C:1
 	NOP					; C:1
 
@@ -980,6 +997,62 @@ fo4noovfl					; T:@+21
 	; done
 	RETFIE		FAST			; C:2
 
+
+
+
+
+#if 1
+
+usbOUTNoData27					; T:@+27
+
+	NOP					; C:1
+
+usbOUTNoData28					; T:@+28
+
+	BTFSC		ppindex, 4, BANKED	; C:1/2
+	BRA		usbOUTNoData1		; C:2
+
+usbOUTNoData0					; T:@+30
+
+	SETF		OUTPCMData0+0x8, BANKED	; C:1
+	SETF		OUTPCMData0+0x9, BANKED	; C:1
+	SETF		OUTPCMData0+0xA, BANKED	; C:1
+	SETF		OUTPCMData0+0xB, BANKED	; C:1
+	SETF		OUTPCMData0+0xC, BANKED	; C:1
+	SETF		OUTPCMData0+0xD, BANKED	; C:1
+	SETF		OUTPCMData0+0xE, BANKED	; C:1
+	SETF		OUTPCMData0+0xF, BANKED	; C:1
+
+						; T:@+38
+	
+      #ifdef DEBUG_LOST_OUT
+      	INCF		IN_ODD_LOSSES, BANKED	; C:1
+	BRA		atpls41			; C:2
+      #else
+	BRA		atpls40			; C:2
+      #endif
+
+usbOUTNoData1					; T:@+31
+	SETF		OUTPCMData1+0x8, BANKED	; C:1
+	SETF		OUTPCMData1+0x9, BANKED	; C:1
+	SETF		OUTPCMData1+0xA, BANKED	; C:1
+	SETF		OUTPCMData1+0xB, BANKED	; C:1
+	SETF		OUTPCMData1+0xC, BANKED	; C:1
+	SETF		OUTPCMData1+0xD, BANKED	; C:1
+	SETF		OUTPCMData1+0xE, BANKED	; C:1
+	SETF		OUTPCMData1+0xF, BANKED	; C:1
+
+						; T:@+39
+	
+      #ifdef DEBUG_LOST_OUT
+      	INCF		IN_ODD_LOSSES, BANKED	; C:1
+	BRA		atpls42			; C:2
+      #else
+	BRA		atpls41			; C:2
+      #endif
+
+
+#else
 usbOUTevnNoData					; T:@+27
 
 	MOVLW		0xFF			; C:1
@@ -994,7 +1067,7 @@ usbOUTevnNoData					; T:@+27
 
 						; T:@+36
       #ifdef DEBUG_LOST_OUT
-      	INCF		IN_PCMData1+0x6, BANKED	; C:1
+      	INCF		IN_ODD_LOSSES, BANKED	; C:1
 	BRA		atpls39			; C:2
       #else
 	BRA		atpls38			; C:2
@@ -1015,11 +1088,12 @@ usbOUToddNoData					; T:@+28
 
 						; T:@+37
       #ifdef DEBUG_LOST_OUT
-       	INCF		IN_PCMData1+0x6, BANKED	; C:1
+       	INCF		IN_ODD_LOSSES, BANKED	; C:1
 	BRA		atpls40			; C:2
       #else
 	BRA		atpls39			; C:2
       #endif
+#endif
 
 
 ;	Following code section is relocatable
@@ -1040,6 +1114,8 @@ tmr1_isr_init
 
 	MOVLW		8			; set ppindex to 8
 	MOVWF		ppindex, BANKED
+
+	CLRF		outodev, BANKED		; set outodev to zero
 
 	CLRF		passout, BANKED		; set passout to 0
 

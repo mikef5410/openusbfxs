@@ -63,6 +63,9 @@ typedef enum
     DEBUG_RST_PSWRD = 0x44,
     */
 
+    // set isochronous IO on/off
+    START_STOP_ISO  = 0x7e,
+
     // various ProSLIC control commands
     PROSLIC_SCURRENT= 0x80,	// set current index for register enumeration
     PROSLIC_RCURRENT= 0x81,	// read current direct register
