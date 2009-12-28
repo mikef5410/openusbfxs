@@ -1,4 +1,23 @@
-// MISSING: license, version, function documentation
+/*
+ *  openusbfxs.c: Linux kernel driver for the Open USB FXS board
+ *  Copyright (C) <2009>  Angelos Varvitsiotis
+ *
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+// TODO: version, function documentation
 
 #include <linux/init.h>
 #include <linux/module.h>
@@ -87,7 +106,6 @@ struct openusbfxs_dev {
     __u8			isoc_in_size;	/* ISOC IN  packet size	*/
     __u8			isoc_out_size;	/* ISOC OUT packet size	*/
 
-    // TODO: complete bufferwork
     struct isocbuf {
         spinlock_t		lock;
 	struct urb		*urb;
@@ -101,15 +119,22 @@ struct openusbfxs_dev {
 	}			state;
 	int			len;
 	struct openusbfxs_dev	*dev;
-    }				outbufs[OPENUSBFXS_MAXURB];
+    }				outbufs[OPENUSBFXS_MAXURB],
+    				in_bufs[OPENUSBFXS_MAXURB];
     int writenext;				/* next buffer for write() */
     int outsubmit;				/* next buffer to submit */
     spinlock_t outbuflock;			/* short-term lock for above */
     wait_queue_head_t		outwqueue;	/* for write() to wait */
-    char			tinywbuf[OPENUSBFXS_CHUNK_SIZE];
-    int				twbcount;
+    char			tinywbuf[OPENUSBFXS_CHUNK_SIZE]; /* if < chunk*/
+    int				twbcount;	/* bytes stored in tinywbuf */
+    __u8			outseqno;	/* sequence number */
 
-    // TODO: struct isocbuf	inbufs [2];	/* less hard to amortize? */
+    int read_next;
+    int in_submit;
+    spinlock_t in_buflock;
+    wait_queue_head_t		in_wqueue;
+    char			tinyrbuf[OPENUSBFXS_CHUNK_SIZE];
+    int				trbcount;
 
     int				errors;		/* from last request	*/
 
@@ -344,7 +369,6 @@ open_error:
 static int openusbfxs_ioctl (struct inode *inode, struct file *file,
   unsigned int cmd, unsigned long arg)
 {
-    // TODO: implement me
     struct openusbfxs_dev *dev;
     __u8 drval;
     int retval = 0;
@@ -363,6 +387,7 @@ static int openusbfxs_ioctl (struct inode *inode, struct file *file,
 
     mutex_lock (&dev->iomutex);
 
+    // TODO: implement unimplemented ioctls
     switch (cmd) {
       case OPENUSBFXS_IOCRESET:
       case OPENUSBFXS_IOCREGDMP:
@@ -653,6 +678,9 @@ static int openusbfxs_flush (struct file *file, fl_owner_t id)
     /* reset tiny buffer(s) */
     dev->twbcount = 0;
 
+    /* reset sequence number(s) */
+    dev->outseqno = 0;
+
     /* read error state and clean it for subsequent opens to find it clear */
     spin_lock_irqsave (&dev->errlock, flags);
     /* pass on EPIPE, convert others to EIO */
@@ -910,6 +938,7 @@ static int openusbfxs_isoc_out_submit (struct openusbfxs_dev *dev, int memflag){
     int retval = 0;
     struct isocbuf *ourbuf;
     unsigned long flags;	/* irqsave flags */
+    union openusbfxs_data *p;
 
     /* make sure write() does not alter our dev state while we are working */
     spin_lock_irqsave (&dev->outbuflock, flags);
@@ -928,7 +957,11 @@ static int openusbfxs_isoc_out_submit (struct openusbfxs_dev *dev, int memflag){
     ourbuf->state = st_sbmng;		/* tell write() this buffer is ours */
     spin_unlock_irqrestore (&ourbuf->lock, flags);
 
-    // TODO: fill in header fields, like sequence numbers etc.
+    /* plant the right sequence numbers */
+    for (p = (union openusbfxs_data *)ourbuf->buf;
+      p < (union openusbfxs_data *)(ourbuf->buf + ourbuf->len); p++) {
+        p->outpack.seqno = dev->outseqno++;
+    }
 
     /* check for buffer underrun */
     if (ourbuf->len >= OPENUSBFXS_DPACK_SIZE) { /* must contain >= 1 packet */
@@ -950,8 +983,8 @@ static int openusbfxs_isoc_out_submit (struct openusbfxs_dev *dev, int memflag){
 
     /* memflag must be GFP_ATOMIC when we execute in handler context!
      * in that case, make sure that the device is not unloading, or a
-     * race will occur; note that it's safe to hold a spinlock if we
-     * use GFP_ATOMIC
+     * race will occur (note that it's safe to hold a spinlock since
+     * we are using GFP_ATOMIC)
      */
     if (memflag == GFP_ATOMIC) spin_lock_irqsave (&dev->sttlock, flags);
     if (dev->state == OPENUSBFXS_STATE_OK) {
@@ -1002,7 +1035,7 @@ static void openusbfxs_isoc_out_cbak (struct urb *urb)
     spin_unlock_irqrestore (&ourbuf->lock, flags);
 
     // TODO: wake_up_interruptible_sync?? (normally not needed, scheduler
-    // "knows" we are running in an IRQ context and will let us finish first)
+    // "knows" we are running in IRQ context and will let us finish first)
     wake_up_interruptible (&dev->outwqueue);
 
     /* submit a new urb (for now, ignore the return value) */
