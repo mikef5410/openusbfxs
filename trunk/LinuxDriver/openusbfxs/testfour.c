@@ -10,15 +10,14 @@ main () {
     int t = 0;
     int h;
     int k;
-    if ((d = open ("vm-options.ulaw", O_RDONLY)) < 0) {
-        perror ("open vm-options.ulaw failed");
+    if ((d = open ("testfour.ulaw", O_CREAT|O_WRONLY|O_TRUNC, 0644)) < 0) {
+        perror ("open testfour.ulaw failed");
 	exit (1);
     }
-    if ((o = open ("/dev/openusbfxs0", O_WRONLY)) < 0) {
+    if ((o = open ("/dev/openusbfxs0", O_RDONLY)) < 0) {
         perror ("open /dev/openusbfxs0 failed");
 	exit (1);
     }
-    sleep (1);
     if ((i = ioctl (o, OPENUSBFXS_IOCGHOOK, &h)) < 0) {
 	perror ("IOCGHOOK failed");
 	exit (1);
@@ -46,8 +45,9 @@ main () {
 	if (h) break;
         sleep (1);
     }
-    while (read (d, &c[0], 8) == 8) {
-        if ((n = write (o, &c[0], 8)) < 0) {
+
+    while (read (o, &c[0], 8) == 8) {
+        if ((n = write (d, &c[0], 8)) < 0) {
 	    perror ("write failed");
 	    exit (1);
 	}
@@ -72,5 +72,5 @@ main () {
 	    printf ("DTMF key pressed: %c\n", k);
 	}
     }
-    printf ("A total of %d bytes were written\n", t);
+    printf ("A total of %d bytes were read and saved\n", t);
 }
