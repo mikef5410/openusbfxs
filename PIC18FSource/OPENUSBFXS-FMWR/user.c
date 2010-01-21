@@ -30,6 +30,7 @@
 #include "user.h"
 #include "tmr1_isr.h"
 #include "proslic.h"
+#include "pcmpacket.h"
 //////////////// END contributed code by avarvit
 
 /** V A R I A B L E S ********************************************************/
@@ -134,7 +135,7 @@ void UserInit(void) {
     for (i = 0; i < 65535; i++) ;       // wait long enough for TIMR1 to fire
     _cs_3210 = 1;                       // deselect the 3210 chip
     _reset_3210 = 0;                    // reset the 3210 chip
-    for (i = 0; i < 1024; i++) ;        // wait some time
+    for (i = 0; i < 4096; i++) ;        // wait some time
     _reset_3210 = 1;                    // set the chip to the not reset state
 
     // setup SPI 
@@ -143,8 +144,8 @@ void UserInit(void) {
       // (clock polarity set to idle state high) as required by the 3210, p.53
       // notice also that the 3210 seems to be asserting both its input and its
       // output on rising clock edge, so SMPMID should be OK
-    // OpenSPI (SPI_FOSC_16, MODE_11, SMPMID);
-    OpenSPI (SPI_FOSC_4, MODE_11, SMPMID);
+    OpenSPI (SPI_FOSC_16, MODE_11, SMPMID);
+    // OpenSPI (SPI_FOSC_4, MODE_11, SMPMID);
 
     mInitAllLEDs();
     mInitAllSwitches();
@@ -185,25 +186,22 @@ void ProcessIO(void)
     // User Application USB tasks
     if((USBDeviceState < CONFIGURED_STATE)||(USBSuspendControl==1)) return;
 
-    /*
-    // TMR3 runs at Fosc/4 = 12MHz; it cycles through about every 5 ms
-    if (TMR3L > 128) {	// hopefully, this will occur once every now and then
-	if (TMR3H == 0) {
-	    hkdtmf = ReadProSLICDirectRegister (24) |
-		    ((ReadProSLICDirectRegister (68) & 0x01) << 7);
-	}
-    }
-    */
     if (!_int_3210) {
 	// interrupts (should) occur only on hook state changes or DTMF detect
 
+	// Debugging
+	// BYTE DR18 = ReadProSLICDirectRegister (18);
+	// IN_PCMData0[4] = DR18;
+
 	// check for hook state
 	DR19 = ReadProSLICDirectRegister (19);
+	// Debugging
+	// IN_PCMData0[5] = DR19;
 	if (DR19) {
 	    WriteProSLICDirectRegister (19, DR19);	// clears interrupt
-	    if (DR19 & 0x02) {				// hook state changed
+	    if (DR19 & 0x03) {				// hook state changed
 	        DR68 = ReadProSLICDirectRegister (68);
-		if (DR68 & 0x01) {			// phone is off-hook
+		if (DR68 & 0x03) {			// phone is off-hook
 		    hkdtmf |= 0x80;			// set or clear bit 7
 		}
 		else {
@@ -211,13 +209,24 @@ void ProcessIO(void)
 		}
 	    }
 	}
+	// check for dtmf state
 	DR20 = ReadProSLICDirectRegister (20);
+	// Debugging
+	// IN_PCMData0[6] = DR20;
 	if (DR20) {					
 	    WriteProSLICDirectRegister (20, DR20);	// clears interrupt
 	    if (DR20 & 0x01) {				// DTMF event
 	        DR24 = ReadProSLICDirectRegister (24);	// get DTMF state
 		hkdtmf &= 0xe0;				// forget previous state
 		hkdtmf |= (DR24 & 0x1f);		// mask into hkdtmf
+	    }
+	}
+    }
+    else {
+        if (hkdtmf & 0x10) {				// dtmf detected
+	    DR24 = ReadProSLICDirectRegister (24);	// get DTMF state
+	    if (!(DR24 & 0x10)) {			// still being pressed?
+		hkdtmf &= 0xe0;				// no, reset our state
 	    }
 	}
     }

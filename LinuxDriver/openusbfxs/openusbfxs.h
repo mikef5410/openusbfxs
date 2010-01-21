@@ -77,7 +77,7 @@
 /* get hook state: returns zero if on-hook, one if off-hook */
 #define OPENUSBFXS_IOCGHOOK	_IOR(OPENUSBFXS_IOC_MAGIC, 4, int)
 /* generic event (hook state or DTMF): 0 is no event, others ??? */
-#define OPENUSBFXS_IOCGEVENT	_IOR(OPENUSBFXS_IOC_MAGIC, 5, int)
+#define OPENUSBFXS_IOCGDTMF	_IOR(OPENUSBFXS_IOC_MAGIC, 5, int)
 #define OPENUSBFXS_MAX_IOCTL	5
 
 #endif /* OPENUSBFXS_H */

@@ -505,7 +505,7 @@ usb_not_detected:
 	RegValue = 0;
 
 start_over:
-	if (RegValue > 255) goto usb_not_detected;
+	if (RegValue > 255 && RegValue < 500) goto usb_not_detected;
 
 	printf ("OpenUSBFXS driver: starting up...\n");
 
@@ -790,6 +790,7 @@ start_over:
 	// enable selected interrupts
 	if (!WriteAndShowDR (21, &RegValue, 0x00, true)) goto start_over; // none here
 	if (!WriteAndShowDR (22, &RegValue, 0xFF, true)) goto start_over; // all here
+	// if (!WriteAndShowDR (22, &RegValue, 0x03, true)) goto start_over; // LCP/RTIP only here
 	if (!WriteAndShowDR (23, &RegValue, 0x01, true)) goto start_over; // only DTMF here
 	//for (unsigned char i = 19; i <= 23; i++) {
 	//	if (!WriteAndShowDR (i, &RegValue, 0xFF, true)) goto start_over;
