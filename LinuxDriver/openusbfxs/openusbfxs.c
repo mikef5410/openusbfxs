@@ -66,12 +66,12 @@ static char *driverversion = "0.0";
 #define RPACKSPERURB	4
 #endif /* RPACKSPERURB */
 
-#ifndef WURBSINFLIGHT	/* any value from 2 to OPENUSBFXS_INFLIGHT */
-#define WURBSINFLIGHT	4
+#ifndef WURBSINFLIGHT	/* any value from 2 to OPENUSBFXS_MAXINFLIGHT */
+#define WURBSINFLIGHT	OPENUSBFXS_INFLIGHT
 #endif /* WURBSINFLIGHT */
 
-#ifndef RURBSINFLIGHT	/* any value from 2 to OPENUSBFXS_INFLIGHT */
-#define RURBSINFLIGHT	4
+#ifndef RURBSINFLIGHT	/* any value from 2 to OPENUSBFXS_MAXINFLIGHT */
+#define RURBSINFLIGHT	OPENUSBFXS_INFLIGHT
 #endif /* RURBSINFLIGHT */
 
 /* module parameters (lots of debugging ones) */
@@ -313,6 +313,10 @@ static void openusbfxs_delete (struct kref *kr)
     dev->state = OPENUSBFXS_STATE_UNLOAD;
     spin_unlock_irqrestore (&dev->sttlock, flags);
 
+    /* wake up any blocked reads or writes */
+    wake_up_interruptible (&dev->in_wqueue);
+    wake_up_interruptible (&dev->outwqueue);
+
     /* destroy board setup work queue */
     destroy_workqueue (dev->iniwq);	/* kills worker thread as well */
     dev->iniwq = NULL;
@@ -430,6 +434,11 @@ static int openusbfxs_ioctl (struct inode *inode, struct file *file,
     }
 
     mutex_lock (&dev->iomutex);	/* avoid unload while we are working */
+    
+    if (dev->state != OPENUSBFXS_STATE_OK) {	/* return immediately on error*/
+        mutex_unlock (&dev->iomutex);
+	return -ENODEV;		/* device has gone away */
+    }
 
     // TODO: implement unimplemented ioctls
     switch (cmd) {
@@ -580,10 +589,18 @@ read_findbuf:
     else {
         if (wait_event_interruptible (dev->in_wqueue,
 	  ((ourbuf->state >= st_ready) ||
-	  (ourbuf != &dev->in_bufs[dev->read_next])))) {
+	   (dev->state != OPENUSBFXS_STATE_OK) ||
+	   (ourbuf != &dev->in_bufs[dev->read_next])))) {
 	    retval = -ERESTARTSYS;
 	    goto read_exit;
 	}
+
+	/* make sure we are not unloading or something */
+	if (dev->state != OPENUSBFXS_STATE_OK) {
+	    retval = -ENODEV;	/* device has gone away */
+	    goto read_exit;
+	}
+
 	OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING,
 	  "%s: after wait_event", __func__);
 
@@ -776,10 +793,18 @@ write_findbuf:
     else {
 	if (wait_event_interruptible (dev->outwqueue,
 	  ((ourbuf->state <= st_wrtng) ||
-	  (ourbuf != &dev->outbufs[dev->writenext])))) {
+	   (dev->state != OPENUSBFXS_STATE_OK) ||
+	   (ourbuf != &dev->outbufs[dev->writenext])))) {
 	    retval = -ERESTARTSYS;
 	    goto write_exit;
 	}
+
+	/* make sure we are not unloading or something */
+	if (dev->state != OPENUSBFXS_STATE_OK) {
+	    retval = -ENODEV;	/* device has gone away */
+	    goto write_exit;
+	}
+
 	OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING,
 	  "%s: after wait_event", __func__);
 
@@ -1360,7 +1385,7 @@ static void openusbfxs_isoc_out_cbak (struct urb *urb)
 	goto isoc_out_cbak_exit;
     }
     spin_lock_irqsave (&ourbuf->lock, flags);
-    memset (ourbuf->buf, 0, OPENUSBFXS_MAXOBUFLEN);
+    memset (ourbuf->buf, 0xff, OPENUSBFXS_MAXOBUFLEN);
     ourbuf->len = 0;
     ourbuf->state = st_empty;
     spin_unlock_irqrestore (&ourbuf->lock, flags);
@@ -1580,13 +1605,15 @@ init_restart:
     dr_write_check (sts, 0x08, 0, drval, init_restart); /* exit dig. loopback */
     dr_write_check (sts, 108, 0xeb, drval, init_restart); /* rev.E features */
     dr_write (sts, 66, 0x01, drval, init_restart); /* Vov=low, Vbat~Vring */
-    /* following six parameter values taken from SiLabs Excel formula sheet */
+    /* following six parameter values taken from SiLabs Excel formula sheet
+     * (with a fixed inductor value of 100uH, NREN=1, dist=1000)
+     */
     dr_write_check (sts, 92, 202, drval, init_restart); /* PWM period=12.33us */
     dr_write_check (sts, 93, 12, drval, init_restart); /* min off time=732ns */
     dr_write_check (sts, 74, 44, drval, init_restart); /* Vbat(high)=-66V */
     dr_write_check (sts, 75, 40, drval, init_restart); /* Vbat(low)=-60V */
     dr_write_check (sts, 71, 0, drval, init_restart); /* Cur. max=20mA (dflt) */
-    /* already done above
+    /* already done above, so it's commented out here
     ir_write (sts, 40, 0x0000, irval, init_restart); /@ cmmode bias ringing */
 
     /* initialization step #4: bring up DC-DC converter (sigh!...) */
@@ -2092,10 +2119,17 @@ static void openusbfxs_disconnect (struct usb_interface *intf)
     /* tell USB core's PM that we don't need autosuspend turned off anymore */
     usb_autopm_put_interface (intf);
 
-    /* tell our board setup worker thread to exit (note: also in _delete()) */
+    /* note: this is needed here, although the functionality also exists
+     * in openusbfxs_delete(), because _delete() is not called until the
+     * last kref from open()ing the device is release()d. Therefore, we
+     * need to alter the state to tell read(), write() and ioctl() that
+     * they should fail
+     */
     spin_lock_irqsave (&dev->sttlock, flags);
     dev->state = OPENUSBFXS_STATE_UNLOAD;
     spin_unlock_irqrestore (&dev->sttlock, flags);
+    wake_up_interruptible (&dev->in_wqueue);
+    wake_up_interruptible (&dev->outwqueue);
 
     /* return our minor back to the kernel (via USB core) */
     usb_deregister_dev (intf, &openusbfxs_class);
@@ -2127,12 +2161,26 @@ static int __init openusbfxs_init(void)
     // TODO: wpacksperurb == 1 behaves strangely, I have to check why;
     // meanwhile, this value is disabled here
     if (wpacksperurb < 2 || wpacksperurb > OPENUSBFXS_MAXPCKPERURB) {
-        err ("parameter error: wpacksperurb must be between 2 and %d\n",
+        printk (KERN_ERR
+	  "parameter error: wpacksperurb must be between 2 and %d\n",
 	  OPENUSBFXS_MAXPCKPERURB);
         return -EINVAL;
     }
-    if (wurbsinflight < 2 || wurbsinflight > OPENUSBFXS_INFLIGHT) {
-        err ("parameter error: wurbsinflight must be between 2 and %d\n",
+    if (wurbsinflight < 2 || wurbsinflight > OPENUSBFXS_MAXINFLIGHT) {
+        printk (KERN_ERR
+	  "parameter error: wurbsinflight must be between 2 and %d\n",
+	  OPENUSBFXS_INFLIGHT);
+	return -EINVAL;
+    }
+    if (rpacksperurb < 2 || rpacksperurb > OPENUSBFXS_MAXPCKPERURB) {
+        printk (KERN_ERR
+	  "parameter error: rpacksperurb must be between 2 and %d\n",
+	  OPENUSBFXS_MAXPCKPERURB);
+        return -EINVAL;
+    }
+    if (rurbsinflight < 2 || rurbsinflight > OPENUSBFXS_MAXINFLIGHT) {
+        printk (KERN_ERR
+	  "parameter error: wurbsinflight must be between 2 and %d\n",
 	  OPENUSBFXS_INFLIGHT);
 	return -EINVAL;
     }

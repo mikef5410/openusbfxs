@@ -38,6 +38,7 @@
 
 #define OPENUSBFXS_MAXURB	16	/* maximum number of isoc URBs */
 #define OPENUSBFXS_INFLIGHT	 4	/* number of isoc URBs in flight */
+#define OPENUSBFXS_MAXINFLIGHT	 8	/* max isoc URBs in flight */
 #define OPENUSBFXS_MAXPCKPERURB	32	/* max number of packets per isoc URB */
 
 
