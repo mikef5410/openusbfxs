@@ -65,6 +65,8 @@ typedef enum
 
     // set isochronous IO on/off
     START_STOP_ISO  = 0x7e,
+    // perform SOF calibration
+    SOF_PROFILE     = 0x7f,
 
     // various ProSLIC control commands
     PROSLIC_SCURRENT= 0x80,	// set current index for register enumeration

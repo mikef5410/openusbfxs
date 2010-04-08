@@ -8,14 +8,16 @@ typedef unsigned char __u8;
 enum enum_openusbfxs_cmd {
     READ_VERSION	= 0x00,
 
-    PROSLIC_SCURRENT	= 0x80,
-    PROSLIC_RCURRENT	= 0x81,
-    PROSLIC_RDIRECT	= 0x82,
-    PROSLIC_WDIRECT	= 0x83,
-    PROSLIC_RDINDIR	= 0x84,
-    PROSLIC_WRINDIR	= 0x85,
+    START_STOP_IO	= 0x7E,		/* cease/start PCM I/O		*/
+    SOF_PROFILE		= 0x7F,		/* perform SOF profiling	*/
 
-    START_STOP_IO	= 0x7E,
+    PROSLIC_SCURRENT	= 0x80,		/* unimplemented		*/
+    PROSLIC_RCURRENT	= 0x81,		/* unimplemented		*/
+    PROSLIC_RDIRECT	= 0x82,		/* read direct register		*/
+    PROSLIC_WDIRECT	= 0x83,		/* write direct register	*/
+    PROSLIC_RDINDIR	= 0x84,		/* read indirect register	*/
+    PROSLIC_WRINDIR	= 0x85,		/* write indirect register	*/
+
 
     RESET		= 0xFF
 };
@@ -79,33 +81,35 @@ union openusbfxs_data {
     }		oblique;
     struct {
 	__u8	unusd1[3];
-	__u8	serial;
+	__u8	outseq;
 	__u8	unusd2[4];
         __u8	sample[OPENUSBFXS_CHUNK_SIZE];
     }		outpack;
     struct {
 	__u8	magic1;
 	__u8	oddevn;		/* 0xdd for odd, 0xee for even packets */
-	__u8	rsrved[6];
+	__u8	rsrvd1;
+	__u8	moutsn;		/* mirror of former out-packet seq # */
+	__u8	rsrvd2[4];
         __u8	sample[OPENUSBFXS_CHUNK_SIZE];
     }		in_pack;	/* yet unidentified in-packet */
     struct {
-        __u8	magic1;
-	__u8	magic2;		/* 0xdd for odd packets */
+        __u8	magic1;		/* should always be 0xba */
+	__u8	oddevn;		/* 0xdd for odd packets */
 	__u8	hkdtmf;
-	__u8	moutsm;
+	__u8	moutsn;
 	__u16	tmr3lv;
 	__u8	losses;
-	__u8	serial;
+	__u8	inoseq;
         __u8	sample[OPENUSBFXS_CHUNK_SIZE];
     }		inopack;	/* odd in-packet */
     struct {
-    	__u8	magic1;
-	__u8	magic2;		/* 0xee for even packets */
+    	__u8	magic1;		/* should always be 0xba */
+	__u8	oddevn;		/* 0xee for even packets */
 	__u8	unusd1;
-	__u8	moutsm;
+	__u8	moutsn;
 	__u8	unusd3[3];
-	__u8	serial;
+	__u8	ineseq;
         __u8	sample[OPENUSBFXS_CHUNK_SIZE];
     }		inepack;	/* even in-packet */
 };

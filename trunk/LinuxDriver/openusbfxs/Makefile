@@ -13,8 +13,8 @@ ifneq ($(KERNELRELEASE),)
 
 else
 
-#     KERNELDIR ?= /lib/modules/$(shell uname -r)/build
-     KERNELDIR ?= $(shell pwd)/../../linux-source-2.6.26-2-686-DEBUG
+#     KERNELDIR ?= $(shell pwd)/../../linux-source-2.6.26-2-686-DEBUG
+     KERNELDIR ?= /lib/modules/$(shell uname -r)/build
      PWD := $(shell pwd)
 
 default:

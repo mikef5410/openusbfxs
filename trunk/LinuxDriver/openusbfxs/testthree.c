@@ -2,15 +2,23 @@
 # include <stdlib.h>
 # include <stdio.h>
 # include <unistd.h>
+/* # include <syslog.h> */
 # include "openusbfxs.h"
 
-main () {
+static char *sound = "vm-options.ulaw";
+
+main (int argc, char **argv) {
     int d, o, i;
     char c[8], n;
     int t = 0;
     int h;
     int k;
-    if ((d = open ("vm-options.ulaw", O_RDONLY)) < 0) {
+    struct openusbfxs_stats s;
+
+    if (argc == 2) {
+    	sound = argv [1];
+    }
+    if ((d = open (sound, O_RDONLY)) < 0) {
         perror ("open vm-options.ulaw failed");
 	exit (1);
     }
@@ -18,6 +26,7 @@ main () {
         perror ("open /dev/openusbfxs0 failed");
 	exit (1);
     }
+    /* openlog (argv[0], 0, LOG_USER); */
     sleep (1);
     if ((i = ioctl (o, OPENUSBFXS_IOCGHOOK, &h)) < 0) {
 	perror ("IOCGHOOK failed");
@@ -70,6 +79,18 @@ main () {
 	}
 	if (k) {
 	    printf ("DTMF key pressed: %c\n", k);
+	}
+	/* every 8192 bytes (~1 sec) print out statistics */
+	if (!(t & 0x1fff)) {
+	    if ((i = ioctl (o, OPENUSBFXS_IOCGSTATS, &s)) < 0) {
+		perror ("IOCGSTATS failed");
+		exit (1);
+	    }
+	    printf (
+	    /* syslog (LOG_INFO, */
+	      "IN OVR: %d, IN_MSS: %d, IN_BAD: %d, OUTUND: %d, OUTMSS: %d\n",
+	      s.in_overruns, s.in_missed, s.in_badframes,
+	      s.out_underruns, s.out_missed);
 	}
     }
     printf ("A total of %d bytes were written\n", t);
