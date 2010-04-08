@@ -41,28 +41,75 @@ usb_dev_handle *LibUSBGetDevice (unsigned short vid, unsigned short pid) {
 	usb_find_busses ();
 	usb_find_devices ();
 
-			for (UsbBus = usb_get_busses(); UsbBus; UsbBus = UsbBus->next) {
-				for (UsbDevice = UsbBus->devices; UsbDevice; UsbDevice = UsbDevice->next) {
-					if (UsbDevice->descriptor.idVendor == vid && UsbDevice->descriptor.idProduct== pid) {
-						break;
-					}
-				}
+	for (UsbBus = usb_get_busses(); UsbBus; UsbBus = UsbBus->next) {
+		for (UsbDevice = UsbBus->devices; UsbDevice; UsbDevice = UsbDevice->next) {
+			if (UsbDevice->descriptor.idVendor == vid && UsbDevice->descriptor.idProduct== pid) {
+				break;
 			}
-			if (!UsbDevice) return NULL;
-			ret = usb_open (UsbDevice);
-
-			if (usb_set_configuration (ret, 1) < 0) {
-				usb_close (ret);
-				return NULL;
-			}
-
-			if (usb_claim_interface (ret, 0) < 0) {
-				usb_close (ret);
-				return NULL;
-			}
-
-			return ret;
 		}
+	}
+	if (!UsbDevice) return NULL;
+	ret = usb_open (UsbDevice);
+
+	if (usb_set_configuration (ret, 1) < 0) {
+		usb_close (ret);
+		return NULL;
+	}
+
+	if (usb_claim_interface (ret, 0) < 0) {
+		usb_close (ret);
+		return NULL;
+	}
+
+	return ret;
+}
+
+bool SofProfile (void) {
+	unsigned char Buffer [32];
+	DWORD ActualLength;
+	int i;
+	Buffer[0] = SOF_PROFILE;
+	if (!WriteBulkToUSB(UsbDevInstance, EP1OUTHandle, Buffer, 1, &ActualLength, 1000)) { // send the command over USB
+		printf ("Error writing SOF_PROFILE command\n");
+		return false;
+	}
+	if (!ReadBulkFrmUSB(UsbDevInstance, EP1INHandle, Buffer, 32, &ActualLength, 1000)) {//Receive the answer from the device firmware through USB
+		// signal an error
+		printf ("Error receiving SOF_PROFILE result\n");
+		return false;
+	}
+	for (i = 2; i < 16; i++) {
+		printf (" %02d  ", i - 1);
+	}
+	printf ("\n");
+	for (i = 2; i < 16; i++) {
+		unsigned short t1, t2;
+		t2 = (unsigned short) Buffer [2 * i] |
+			 (((unsigned short) Buffer [2 * i + 1]) << 8);
+		t1 = (unsigned short) Buffer [2 * i - 2] |
+			 (((unsigned short) Buffer [2 * i - 1]) << 8);
+		printf ("%04X ", (unsigned short) (t2 - t1));
+	}
+	printf ("\n");
+	return true;
+}
+
+unsigned char getpassout (void) {
+    unsigned char Buffer [4];
+	DWORD ActualLength;
+
+	Buffer[0] = DEBUG_GET_PSOUT;
+	if (!WriteBulkToUSB(UsbDevInstance, EP1OUTHandle, Buffer, 3, &ActualLength, 1000)) { // send the command over USB
+		printf ("Error writing GET_PSOUT command\n");
+		return 0;
+	}
+	if (!ReadBulkFrmUSB(UsbDevInstance, EP1INHandle, Buffer, 4, &ActualLength, 1000)) {//Receive the answer from the device firmware through USB
+		// signal an error
+		printf ("Error receiving GET_PSOUT result\n");
+		return Buffer[2];
+	}
+}
+
 
 
 bool IsValidPROSLICDirectRegister (const unsigned int b) {
@@ -352,7 +399,7 @@ void SendAudioFile (LPCWSTR filename) {
 	}
 	printf("SendAudioFile: Current priority class is 0x%x\n", GetPriorityClass (GetCurrentProcess ()));
 
-	isoctl [0] = 0x7E;	// manage isochronous
+	isoctl [0] = START_STOP_ISO;	// manage isochronous
 	isoctl [1] = 0;		// don't pause USB I/O
 	isoctl [2] = 0;		// unused
 	isoctl [3] = 0x01;	// test pattern
@@ -508,6 +555,12 @@ start_over:
 	if (RegValue > 255 && RegValue < 500) goto usb_not_detected;
 
 	printf ("OpenUSBFXS driver: starting up...\n");
+
+//	SofProfile ();
+//	SofProfile ();
+//	SofProfile ();
+//	SofProfile ();
+//	exit (0);
 
 	ShowDirectRegisters ();
 	
@@ -839,8 +892,10 @@ start_over:
 	// enable PCM u-law, disable PCM I/O
 	if (!WriteAndShowDR (1, &RegValue, 0x08, false)) goto start_over;
 	// set the TXS and RXS registers to 1
+#if 0	// fixed in firmware
 	if (!WriteAndShowDR (2, &RegValue, 0x01, false)) goto start_over;
 	if (!WriteAndShowDR (4, &RegValue, 0x01, false)) goto start_over;
+#endif
 	printf ("OpenUSBFXS Driver: done with PCM initializations.\n");
 
 	printf ("\n\nOpenUSBFXS Driver: all intializations complete!\n\n");

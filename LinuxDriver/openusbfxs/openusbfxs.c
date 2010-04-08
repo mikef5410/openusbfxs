@@ -1,6 +1,6 @@
 /*
  *  openusbfxs.c: Linux kernel driver for the Open USB FXS board
- *  Copyright (C) <2009>  Angelos Varvitsiotis
+ *  Copyright (C) <2009-2010>  Angelos Varvitsiotis
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -32,6 +32,7 @@ static char *driverversion = "0.0";
 #include <linux/kfifo.h>
 #include <linux/wait.h>
 #include <linux/ioctl.h>
+#include <linux/version.h>
 #include <asm/uaccess.h>
 #include "openusbfxs.h"
 #include "cmd_packet.h"
@@ -123,7 +124,7 @@ struct openusbfxs_dev {
         spinlock_t		lock;
 	struct urb		*urb;
 	char			*buf;
-	enum {
+	enum state_enum {
 	    /* the write/OUT state cycle is
 	     *   empty->[writing->{written}]->submitting->submitted->empty
 	     * the read/IN state cycle is
@@ -154,7 +155,7 @@ struct openusbfxs_dev {
     wait_queue_head_t		outwqueue;	/* for write() to wait */
     char			tinywbuf[OPENUSBFXS_CHUNK_SIZE]; /* if < chunk*/
     int				twbcount;	/* bytes stored in tinywbuf */
-    __u8			outserial;	/* sequence number */
+    __u8			outseqno;	/* sequence number */
 
     int read_next;				/* next buffer for read() */
     int in_submit;				/* next rd buffer to submit */
@@ -163,8 +164,12 @@ struct openusbfxs_dev {
     char			tinyrbuf[OPENUSBFXS_CHUNK_SIZE]; /* if < chunk*/
     int				trbcount;	/* bytes stored in tinyrbuf */
     int				trboffst;	/* start position in tinyrbuf */
+    __u8			in_moutsn;	/* our outseqno mirrored */
+    __u32			in_oofseq;	/* # of out-of-seq packets */
+    __u8			in_seqevn;	/* even sequence # from device*/
+    __u8			in_seqodd;	/* odd sequence # from device */
 
-    int				errors;		/* from last request	*/
+    struct openusbfxs_stats	stats;		/* from last request	*/
 
     /* anchor for submitted/pending urbs */
     struct usb_anchor		submitted;
@@ -173,10 +178,12 @@ struct openusbfxs_dev {
 
     /* locks and reference counts */
     int				opencnt;/* number of openers		*/
-    spinlock_t			errlock;/* locked while checking errors	*/
-    spinlock_t			sttlock;/* locked during state changes	*/
+    spinlock_t			statslck;/* locked while updating stats	*/
+    spinlock_t			statelck;/* locked during state changes	*/
     struct kref			kref;	/* kernel/usb reference counts	*/
     struct mutex		iomutex;/* locked during fs I/O ops	*/
+    struct mutex		rdmutex;/* locked during read I/O ops	*/
+    struct mutex		wrmutex;/* locked during write I/O ops	*/
 
     /* wait queues */
 
@@ -235,7 +242,7 @@ static struct usb_class_driver openusbfxs_class = {
     .minor_base	= OPENUSBFXS_MINOR_BASE
 };
 
-/* macros and functions for manipulating and printing register values */
+/* macros and functions for manipulating and printing Si3210 register values */
 
 #define dr_read(s,r,t,l)						\
   do {									\
@@ -309,9 +316,9 @@ static void openusbfxs_delete (struct kref *kr)
     unsigned long flags;	/* irqsave flags */
 
     /* tell our board setup worker thread to exit */
-    spin_lock_irqsave (&dev->sttlock, flags);
+    spin_lock_irqsave (&dev->statelck, flags);
     dev->state = OPENUSBFXS_STATE_UNLOAD;
-    spin_unlock_irqrestore (&dev->sttlock, flags);
+    spin_unlock_irqrestore (&dev->statelck, flags);
 
     /* wake up any blocked reads or writes */
     wake_up_interruptible (&dev->in_wqueue);
@@ -363,6 +370,7 @@ static int openusbfxs_open (struct inode *inode, struct file *file)
     struct openusbfxs_dev *dev;
     struct usb_interface *intf;
     int minor;
+    unsigned long flags;	/* irqsave flags */
     int retval = -ENODEV;
 
     OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING, "open()");
@@ -370,17 +378,18 @@ static int openusbfxs_open (struct inode *inode, struct file *file)
     minor = iminor (inode);
     intf = usb_find_interface (&openusbfxs_driver, minor);
     if (!intf) { /* e.g. if a minor was left un-deregistered? */
-        err ("%s error: cannot find device for minor %d", __func__, minor);
+        OPENUSBFXS_ERR ("%s error: cannot find device for minor %d",
+	  __func__, minor);
 	goto open_error;
     }
     dev = usb_get_intfdata (intf);
     if (!dev) {	/* might happen while we are executing openusb_disconnect() */
-    	err ("%s error: no device data for minor %d - disconnecting?",
+    	OPENUSBFXS_ERR ("%s error: no device data for minor %d - disconnected?",
 	  __func__, minor);
 	goto open_error;
     }
 
-    /* return -EAGAIN if the device is not ready (yet) */
+    /* return -EAGAIN if the device is there but is not ready (yet) */
     if (dev->state != OPENUSBFXS_STATE_OK) {
 	return (dev->state == OPENUSBFXS_STATE_ERROR)? -EIO : -EAGAIN;
     }
@@ -391,7 +400,7 @@ static int openusbfxs_open (struct inode *inode, struct file *file)
     /* lock IO mutex in order to access dev atomically (we may sleep) */
     mutex_lock (&dev->iomutex);
 
-    /* implement exclusive open */
+    /* implement exclusive open (probably insufficient if multithreading) */
     if (dev->opencnt) {
     	retval = -EBUSY;
 	mutex_unlock (&dev->iomutex);
@@ -407,6 +416,14 @@ static int openusbfxs_open (struct inode *inode, struct file *file)
     /* set linefeed to forward active mode */
     // retval = write_direct (dev, 64, 0x01, &trash8);
     retval = 0;
+
+    /* reset stats; this has to be here and not in dev initialization,
+     * because initial mismatch in sequence numbers etc. causes a first
+     * set of packets to be reported as errors (missed etc.);
+     */
+    spin_lock_irqsave (&dev->statslck, flags);
+    memset (&dev->stats, 0, sizeof (struct openusbfxs_stats));
+    spin_unlock_irqrestore (&dev->statslck, flags);
 
 open_error:
     return retval;
@@ -427,7 +444,7 @@ static int openusbfxs_ioctl (struct inode *inode, struct file *file,
     if (_IOC_TYPE(cmd) != OPENUSBFXS_IOC_MAGIC) return -ENOTTY;
     if (_IOC_NR(cmd) > OPENUSBFXS_MAX_IOCTL) return -ENOTTY;
 
-    if (_IOC_DIR(cmd) & _IOC_READ) {	/* the _IOR_XXX ioctls pass an int * */
+    if (_IOC_DIR(cmd) & _IOC_READ) {
         if (!access_ok (VERIFY_WRITE, (void __user *) arg, _IOC_SIZE(cmd))) {
 	    return -EFAULT;
 	}
@@ -440,11 +457,11 @@ static int openusbfxs_ioctl (struct inode *inode, struct file *file,
 	return -ENODEV;		/* device has gone away */
     }
 
-    // TODO: implement unimplemented ioctls
     switch (cmd) {
+      // TODO: implement unimplemented IOCRESET and IOCREGDMP ioctls
       case OPENUSBFXS_IOCRESET:
       case OPENUSBFXS_IOCREGDMP:
-	warn ("%s: ioctl %d is not yet implemented", __func__, cmd);
+	OPENUSBFXS_WARN ("%s: ioctl %d is not yet implemented", __func__, cmd);
 	break;
       case OPENUSBFXS_IOCSRING:
         if (arg) {
@@ -483,6 +500,13 @@ static int openusbfxs_ioctl (struct inode *inode, struct file *file,
 	    retval = __put_user (0, (int __user *) arg);
 	}
 	break;
+      case OPENUSBFXS_IOCGSTATS:
+        if (copy_to_user ((struct openusbfxs_stats __user *) arg,
+	  &dev->stats, sizeof (struct openusbfxs_stats))) {
+	    retval = -EFAULT;
+	    OPENUSBFXS_ERR ("%s: copy_to_user failed", __func__);
+	}
+        break;
       default:
 	retval = -ENOTTY;
 	break;	/* will return 'inappropriate ioctl for device' */
@@ -491,8 +515,6 @@ static int openusbfxs_ioctl (struct inode *inode, struct file *file,
     mutex_unlock (&dev->iomutex);
     return retval;
 }
-
-
 
 static ssize_t openusbfxs_read (struct file *file, char __user *ubuf,
   size_t count, loff_t *ppos)
@@ -509,10 +531,13 @@ static ssize_t openusbfxs_read (struct file *file, char __user *ubuf,
 
     dev = file->private_data;
 
-    OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING, "read(fp,buf,%d)", count);
+    OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING, "read(fp,buf,%d)", (int) count);
 
     /* make sure board state is still OK */
     if (dev->state != OPENUSBFXS_STATE_OK) return -EIO;
+
+    /* prevent others from attempting concurrent read()s (we may sleep) */
+    mutex_lock (&dev->rdmutex);
 
     /* finish off quickly with the zero-count case */
     if (!count) goto read_exit;
@@ -523,7 +548,7 @@ static ssize_t openusbfxs_read (struct file *file, char __user *ubuf,
     if (count <= dev->trbcount) {
         if (copy_to_user (ubuf, dev->tinyrbuf + dev->trboffst, count)) {
 	    retval = -EFAULT;
-	    err ("%s: copy_to_user failed", __func__);
+	    OPENUSBFXS_ERR ("%s: copy_to_user failed", __func__);
 	    goto read_exit;
 	}
 	dev->trbcount -= count;
@@ -539,7 +564,7 @@ static ssize_t openusbfxs_read (struct file *file, char __user *ubuf,
     buf = kmalloc (count, GFP_KERNEL);
     if (!buf) {
         retval = -ENOMEM;
-	err ("%s: out of memory", __func__);
+	OPENUSBFXS_ERR ("%s: out of memory", __func__);
 	goto read_exit;
     }
 
@@ -556,9 +581,9 @@ static ssize_t openusbfxs_read (struct file *file, char __user *ubuf,
 
 read_findbuf:
 
-    /* account for data read during previous rounds (this is neede
+    /* account for data read during previous rounds (this is needed
      * here only for the O_NONBLOCK case where we return the
-     * current retval immediately
+     * current retval immediately)
      */
     retval += actual;
     count -= actual;
@@ -611,7 +636,8 @@ read_findbuf:
 	    goto read_findbuf;
 	}
 	OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING,
-	  "%s: buffer %d state %d", __func__, ourbuf - &dev->in_bufs[0],
+	  "%s: buffer %d state %d", __func__, 
+	    (int) (ourbuf - &dev->in_bufs[0]),
 	    ourbuf->state);
     }
 
@@ -677,8 +703,8 @@ read_newchunk:
     if (count <= OPENUSBFXS_CHUNK_SIZE) {
         OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING,
 	  "%s: about to return %d and keep %d in trbcount",
-	  __func__, retval + actual,
-	  OPENUSBFXS_CHUNK_SIZE - count);
+	  __func__, (int) (retval + actual),
+	  (int) (OPENUSBFXS_CHUNK_SIZE - count));
 	retval += actual;
 	goto read_copy_exit;
     }
@@ -692,10 +718,11 @@ read_newchunk:
 read_copy_exit:
     if (copy_to_user (ubuf, buf, retval)) {
 	retval = -EFAULT;
-	err ("%s: copy_to_user failed", __func__);
+	OPENUSBFXS_ERR ("%s: copy_to_user failed", __func__);
     }
 
 read_exit:
+    mutex_unlock (&dev->rdmutex);
     if (buf) kfree (buf);
     return retval;
 }
@@ -717,13 +744,16 @@ static ssize_t openusbfxs_write (struct file *file, const char __user *ubuf,
 
     dev = file->private_data;
 
-    OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING, "write(fp,buf,%d)", count);
+    OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING, "write(fp,buf,%d)", (int) count);
 
     /* make sure board is still OK */
     
     if (dev->state != OPENUSBFXS_STATE_OK) return -EIO; // or should -EAGAIN?
     /* note: currently we do not alter the state after initial setup, but this
      * may change in the future, so be prepared */
+
+    /* prevent others from attempting concurrent write()s (we may sleep) */
+    mutex_lock (&dev->wrmutex);
 
     /* finish off with the zero-count (probe) case */
     if (!count) goto write_exit;
@@ -735,13 +765,13 @@ static ssize_t openusbfxs_write (struct file *file, const char __user *ubuf,
     buf = kmalloc (count + dev->twbcount, GFP_KERNEL);
     if (!buf) {
         retval = -ENOMEM;
-	err ("%s: out of memory", __func__);
+	OPENUSBFXS_ERR ("%s: out of memory", __func__);
 	goto write_exit;
     }
     if (dev->twbcount) memcpy (buf, dev->tinywbuf, dev->twbcount);
     if (copy_from_user (buf + dev->twbcount, ubuf, count)) {
         retval = -EFAULT;
-	err ("%s: copy_from_user failed", __func__);
+	OPENUSBFXS_ERR ("%s: copy_from_user failed", __func__);
 	goto write_exit;
     }
 
@@ -762,7 +792,7 @@ write_findbuf:
     if (count < OPENUSBFXS_CHUNK_SIZE) {
 	OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING,
 	  "%s: about to return %d and keep %d in twbcount",
-	  __func__, retval + count - dev->twbcount, count);
+	  __func__, (int) (retval + count - dev->twbcount), (int) count);
 	retval += count;		/* report everything was written */
         retval -= dev->twbcount;	/* subtract the "debt" that we payed */
 
@@ -815,21 +845,22 @@ write_findbuf:
 	    goto write_findbuf;
 	}
 	OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING,
-	  "%s: buffer %d state %d", __func__, ourbuf - &dev->outbufs[0],
+	  "%s: buffer %d state %d", __func__, 
+	    (int) (ourbuf - &dev->outbufs[0]),
 	    ourbuf->state);
     }
 
 write_newchunk:
     /* note: the last chunk may be shorter than normal */
     if (count - actual < 16) OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING,
-      "%s: count now is %d", __func__, count - actual);
+      "%s: count now is %d", __func__, (int) (count - actual));
 
     /* make sure we really have something to write into an outbuf now */
     if (count - actual < OPENUSBFXS_CHUNK_SIZE) {
         retval -= dev->twbcount;	/* subtract "debt" that we payed */
 	OPENUSBFXS_DEBUG (OPENUSBFXS_DBGDEBUGGING,
 	  "%s: about to return %d and keep %d in twbcount",
-	  __func__, retval + actual, count - actual);
+	  __func__, (int) (retval + actual), (int) (count - actual));
 	if (count) memcpy (dev->tinywbuf, ptr, count - actual);
 					/* buffer outstanding data in tinywbuf*/
 	dev->twbcount = count - actual;	/* and mark their length in twbcount */
@@ -887,6 +918,7 @@ write_newchunk:
     goto write_newchunk;
 
 write_exit:
+    mutex_unlock (&dev->wrmutex);
     if (buf) kfree (buf);
     return retval;
 }
@@ -936,7 +968,9 @@ static int openusbfxs_flush (struct file *file, fl_owner_t id)
     /* (note: since we do exclusive open, is this really needed?) */
     mutex_lock (&dev->iomutex);
 
-    /* drain was removed because it kills our isochronous I/O mechanism */
+    /* drain was removed because it kills queued isochronous OUT urbs */
+    // TODO: substitute with something that will wait until queued OUT
+    //	     urbs are transmitted - that is, successfully or not
 #if 0
     /* wait for pending writes to drain or cancel them */
     openusbfxs_drain_urbs (dev);
@@ -945,15 +979,21 @@ static int openusbfxs_flush (struct file *file, fl_owner_t id)
     /* reset tiny buffer(s) */
     dev->twbcount = 0;
 
+#if 0
+    // this is stupid, because sequence numbers are a USB link-level
+    // issue and have nothing to do with the open()ed file state
     /* reset sequence number(s) */
-    dev->outserial = 0;
+    dev->outseqno = 0;
+#endif
 
-    /* read error state and clean it for subsequent opens to find it clear */
-    spin_lock_irqsave (&dev->errlock, flags);
+    /* read error and clean error/stats for subsequent opens to find it clear */
+    spin_lock_irqsave (&dev->statslck, flags);
     /* pass on EPIPE, convert others to EIO */
-    retval = (dev->errors)? ((dev->errors == -EPIPE)? -EPIPE : -EIO) : 0;
-    dev->errors = 0;
-    spin_unlock_irqrestore (&dev->errlock, flags);
+    retval = (dev->stats.errors)?
+      ((dev->stats.errors == -EPIPE)? -EPIPE : -EIO) : 0;
+    dev->stats.errors = 0;
+    memset (&dev->stats, 0, sizeof (struct openusbfxs_stats));
+    spin_unlock_irqrestore (&dev->statslck, flags);
 
     /* let others in */
     mutex_unlock (&dev->iomutex);
@@ -1237,6 +1277,7 @@ static int openusbfxs_isoc_out_submit (struct openusbfxs_dev *dev, int memflag){
     struct isocbuf *ourbuf;
     unsigned long flags;	/* irqsave flags */
     union openusbfxs_data *p;
+    enum state_enum oldst;
 
     /* make sure write() does not alter our dev state while we are working */
     spin_lock_irqsave (&dev->outbuflock, flags);
@@ -1252,25 +1293,35 @@ static int openusbfxs_isoc_out_submit (struct openusbfxs_dev *dev, int memflag){
 
     /* from now on we work with this buffer only */
     spin_lock_irqsave (&ourbuf->lock, flags);
+    oldst = ourbuf->state;
     ourbuf->state = st_sbmng;		/* tell write() this buffer is ours */
     spin_unlock_irqrestore (&ourbuf->lock, flags);
-
-    /* plant the right sequence numbers */
-    for (p = (union openusbfxs_data *)ourbuf->buf;
-      p < (union openusbfxs_data *)(ourbuf->buf + ourbuf->len); p++) {
-        p->outpack.serial = dev->outserial++;
-    }
 
     /* check for buffer underrun */
     if (ourbuf->len >= OPENUSBFXS_DPACK_SIZE) { /* must contain >= 1 packet */
 	ourbuf->urb->number_of_packets = ourbuf->len / OPENUSBFXS_DPACK_SIZE;
 	ourbuf->urb->transfer_buffer_length =	/* trim to packet size */
 	  ourbuf->urb->number_of_packets * OPENUSBFXS_DPACK_SIZE;
+	/* plant the right sequence numbers */
+	for (p = (union openusbfxs_data *)ourbuf->buf;
+	  p < (union openusbfxs_data *)(ourbuf->buf + ourbuf->len); p++) {
+	    p->outpack.outseq = dev->outseqno++;
+	}
     }
     else {
-	/* underrun; send out a full buffer's worth of zeros */
+	/* underrun; send out a full buffer's worth of 0xFF's */
 	ourbuf->urb->transfer_buffer_length = OPENUSBFXS_MAXOBUFLEN;
 	ourbuf->urb->number_of_packets = wpacksperurb;
+	/* plant the right sequence numbers */
+	for (p = (union openusbfxs_data *)ourbuf->buf;
+	  p < (union openusbfxs_data *)(ourbuf->buf + OPENUSBFXS_MAXOBUFLEN);
+	  p++) {
+	    p->outpack.outseq = dev->outseqno++;
+	}
+	/* account for underrun */
+	spin_lock_irqsave (&dev->statslck, flags);
+	dev->stats.out_underruns++;
+	spin_unlock_irqrestore (&dev->statslck, flags);
     }
     ourbuf->urb->dev = dev->udev;	// TODO: is this needed every time?
     if (!dev->udev) {			/* disconnect called? */
@@ -1284,11 +1335,11 @@ static int openusbfxs_isoc_out_submit (struct openusbfxs_dev *dev, int memflag){
      * race will occur (note that it's safe to hold a spinlock since
      * we are using GFP_ATOMIC)
      */
-    if (memflag == GFP_ATOMIC) spin_lock_irqsave (&dev->sttlock, flags);
+    if (memflag == GFP_ATOMIC) spin_lock_irqsave (&dev->statelck, flags);
     if (dev->state == OPENUSBFXS_STATE_OK) {
 	retval = usb_submit_urb (ourbuf->urb, memflag);
     }
-    if (memflag == GFP_ATOMIC) spin_unlock_irqrestore (&dev->sttlock, flags);
+    if (memflag == GFP_ATOMIC) spin_unlock_irqrestore (&dev->statelck, flags);
 
     if (retval != 0) {
         usb_unanchor_urb (ourbuf->urb);
@@ -1312,6 +1363,7 @@ static int openusbfxs_isoc_in__submit (struct openusbfxs_dev *dev, int memflag){
     int retval = 0;
     struct isocbuf *ourbuf;
     unsigned long flags;
+    enum state_enum oldst;
 
     /* make sure read() does not alter buffer state while we are working */
     spin_lock_irqsave (&dev->in_buflock, flags);
@@ -1327,8 +1379,16 @@ static int openusbfxs_isoc_in__submit (struct openusbfxs_dev *dev, int memflag){
 
     /* from now on we are working with this buffer only */
     spin_lock_irqsave (&ourbuf->lock, flags);
+    oldst = ourbuf->state;
     ourbuf->state = st_sbmng;	/* tell read() this buffer is ours */
     spin_unlock_irqrestore (&ourbuf->lock, flags);
+
+    /* check for overrun and keep count */
+    if (oldst != st_empty) {	/* read() didn't fully drain this buffer */
+	spin_lock_irqsave (&dev->statslck, flags);
+	dev->stats.in_overruns++;
+	spin_unlock_irqrestore (&dev->statslck, flags);
+    }
 
     ourbuf->urb->dev = dev->udev;	// TODO: is this needed every time?
     if (!dev->udev) {			/* disconnect called? */
@@ -1341,11 +1401,11 @@ static int openusbfxs_isoc_in__submit (struct openusbfxs_dev *dev, int memflag){
      * in that case, make sure the device is not unloading, or a race
      * will occur
      */
-    if (memflag == GFP_ATOMIC) spin_lock_irqsave (&dev->sttlock, flags);
+    if (memflag == GFP_ATOMIC) spin_lock_irqsave (&dev->statelck, flags);
     if (dev->state == OPENUSBFXS_STATE_OK) {
         retval = usb_submit_urb (ourbuf->urb, memflag);
     }
-    if (memflag == GFP_ATOMIC) spin_unlock_irqrestore (&dev->sttlock, flags);
+    if (memflag == GFP_ATOMIC) spin_unlock_irqrestore (&dev->statelck, flags);
     if (retval != 0) {
         usb_unanchor_urb (ourbuf->urb);
 	goto isoc_in__submit_error;
@@ -1372,6 +1432,7 @@ static void openusbfxs_isoc_out_cbak (struct urb *urb)
     struct openusbfxs_dev *dev;
     struct isocbuf *ourbuf;
     unsigned long flags;	/* irqsave flags */
+    int ret;
 
     ourbuf = urb->context;
     dev = ourbuf->dev;
@@ -1380,7 +1441,8 @@ static void openusbfxs_isoc_out_cbak (struct urb *urb)
      * veery screwed up, so we skip and do not submit anything further
      */
     if (ourbuf->state != st_sbmtd) {
-        err ("%s: inconsistent state %d, bailing out", __func__, ourbuf->state);
+        OPENUSBFXS_ERR ("%s: inconsistent state %d, bailing out",
+	  __func__, ourbuf->state);
 	/* serious error -- don't submit new urbs in this situation */
 	goto isoc_out_cbak_exit;
     }
@@ -1395,9 +1457,14 @@ static void openusbfxs_isoc_out_cbak (struct urb *urb)
     wake_up_interruptible (&dev->outwqueue);
 
     /* submit a new urb (for now, ignore the return value) */
-    openusbfxs_isoc_out_submit (dev, GFP_ATOMIC);
-    // TODO: if in error, we should lock dev->errlock and copy the error to dev
-    
+    ret = openusbfxs_isoc_out_submit (dev, GFP_ATOMIC);
+    if (ret) {
+	spin_lock_irqsave (&dev->statslck, flags);
+	dev->stats.errors = ret;
+	dev->stats.lasterrop = err_out;
+	spin_unlock_irqrestore (&dev->statslck, flags);
+    }
+
 isoc_out_cbak_exit:
     return;
 }
@@ -1409,6 +1476,8 @@ static void openusbfxs_isoc_in__cbak (struct urb *urb)
     struct isocbuf *ourbuf;
     unsigned long flags;	/* irqsave */
     int i;
+    int ret;
+    char in_missed;
     union openusbfxs_data *p;
 
     ourbuf = urb->context;
@@ -1416,11 +1485,13 @@ static void openusbfxs_isoc_in__cbak (struct urb *urb)
 
     /* check consistency, quiesce down if test fails */
     if (ourbuf->state != st_sbmtd) {
-        err ("%s: inconsistent state %d, bailing out", __func__, ourbuf->state);
+        OPENUSBFXS_ERR ("%s: inconsistent state %d, bailing out",
+	  __func__, ourbuf->state);
 	/* we won't submit a new urb in this case */
 	goto isoc_in__cbak_exit;
     }
 
+    // FIX THIS COMMENT
     /* scan for hook state and dtmf events now, so that reporting these
      * to the user gets decoupled from the time a read() is issued
      */
@@ -1429,13 +1500,19 @@ static void openusbfxs_isoc_in__cbak (struct urb *urb)
         if (ourbuf->urb->iso_frame_desc[i].status == 0 &&
 	    ourbuf->urb->iso_frame_desc[i].actual_length ==
 	      OPENUSBFXS_DPACK_SIZE) {
+
+	    in_missed = 0;
+	    /* use p as handy packet pointer */
 	    p = ((union openusbfxs_data *)ourbuf->buf) + i;
-	    if (p->in_pack.oddevn == 0xdd) {	/* only in odd packets */
+
+	    /* hook state and dtmf are only reported in odd packets */
+	    if (p->in_pack.oddevn == 0xdd) {	/* odd packet */
 		__u8 hkdtmf = p->inopack.hkdtmf;
 	        /* hook state is hkdtmf bit 7 */
 		dev->hook = hkdtmf & 0x80;
 		/* dtmf status is bit 4 and digit is in bits 3, 2, 1 and 0 */
 		hkdtmf &= 0x1f;
+		/* implement a simple one-digit "latch" to hold dtmf value */
 		if (hkdtmf & 0x10) {		/* if digit is being pressed */
 		    if (!dev->dtmf) {		/* do it just once per digit */
 		        dev->dtmf = hkdtmf;
@@ -1444,7 +1521,57 @@ static void openusbfxs_isoc_in__cbak (struct urb *urb)
 		else {
 		    dev->dtmf = 0;		/* reset if nothing pressed */
 		}
+		if (p->inopack.inoseq != dev->in_seqodd++) {
+		    spin_lock_irqsave (&dev->statslck, flags);
+		    dev->stats.in_missed++;
+		    spin_unlock_irqrestore (&dev->statslck, flags);
+		    dev->in_seqodd = p->inopack.inoseq + 1;
+		}
 	    }
+	    else {				/* even packet */
+		if (p->inepack.ineseq != dev->in_seqevn++) {
+		    spin_lock_irqsave (&dev->statslck, flags);
+		    dev->stats.in_missed++;
+		    spin_unlock_irqrestore (&dev->statslck, flags);
+		    dev->in_seqevn = p->inepack.ineseq + 1;
+		}
+	    }
+	    /* check if we missed a mirrored sequence #; if so, this means
+	     * that one output packet of ours got lost or delayed in the
+	     * way, but in any case it was missed by the board
+	     */
+	    if (!in_missed & (p->in_pack.moutsn != dev->in_moutsn++)) {
+		spin_lock_irqsave (&dev->statslck, flags);
+		dev->stats.out_missed++;
+		spin_unlock_irqrestore (&dev->statslck, flags);
+		/*
+		if (!dev->in_oofseq++) {
+		    OPENUSBFXS_DEBUG (OPENUSBFXS_DBGVERBOSE,
+		      "%s: expected %d, got %d", __func__, dev->in_moutsn - 1,
+		      p->in_pack.moutsn);
+		}
+		*/
+		dev->in_moutsn = p->in_pack.moutsn + 1;
+	    }
+	    /*
+	    else if (dev->in_oofseq) {
+		if (dev->in_oofseq > 1) {
+		    OPENUSBFXS_DEBUG (OPENUSBFXS_DBGVERBOSE,
+		      "%s: a total of %d packets were received ouf of sequence",
+		      __func__, dev->in_oofseq);
+		}
+	        dev->in_oofseq = 0;
+	    }
+	    */
+	}
+	else {
+	    /* report a bad frame (if we don't see the expected sequence in
+	     * the next correctly-received packet, we 'll also increase
+	     * stats.missing)
+	     */
+	    spin_lock_irqsave (&dev->statslck, flags);
+	    dev->stats.in_badframes++;
+	    spin_unlock_irqrestore (&dev->statslck, flags);
 	}
     }
     ourbuf->len = 0;	/* in read bufs, .len is the # of data already read */
@@ -1458,8 +1585,13 @@ static void openusbfxs_isoc_in__cbak (struct urb *urb)
     wake_up_interruptible (&dev->in_wqueue);
 
     /* submit a new urb (for now, ignore the return value) */
-    openusbfxs_isoc_in__submit (dev, GFP_ATOMIC);
-    // TODO: if in error, we should lock dev->errlock and copy the error to dev
+    ret = openusbfxs_isoc_in__submit (dev, GFP_ATOMIC);
+    if (ret) {
+	spin_lock_irqsave (&dev->statslck, flags);
+	dev->stats.errors = ret;
+	dev->stats.lasterrop = err_in;
+	spin_unlock_irqrestore (&dev->statslck, flags);
+    }
 
 isoc_in__cbak_exit:
     return;
@@ -1467,9 +1599,17 @@ isoc_in__cbak_exit:
 
 /* background board setup thread (runs as a worker thread in a workqueue) */
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,20)
 static void openusbfxs_setup (struct work_struct *work)
 {
-    struct openusbfxs_dev *dev;
+    struct openusbfxs_dev *dev =
+      container_of (work, struct openusbfxs_dev, iniwt);
+#else
+static void openusbfxs_setup (void *data)
+{
+    struct openusbfxs_dev *dev = data;
+#endif
+
     int i;		/* generic counter */
     __u8 j;		/* counter, byte-sized */
     __u8 drval;		/* return value for DRs */
@@ -1481,25 +1621,24 @@ static void openusbfxs_setup (struct work_struct *work)
     __u16 lbcfail = 0;	/* # times longitudinal balance calibration failed */
     unsigned long flags;	/* irqsave flags */
 
-    dev = container_of (work, struct openusbfxs_dev, iniwt);
     OPENUSBFXS_DEBUG (OPENUSBFXS_DBGVERBOSE,
       "%s: starting board setup procedure", __func__);
 
     /* wait for USB initialization to settle */
     ssleep (1);
 
-    spin_lock_irqsave (&dev->sttlock, flags);
+    spin_lock_irqsave (&dev->statelck, flags);
     /* never proceed unless in IDLE state (just taking precautions against
      * future bugs if I ever think re-initializing a board is a good idea)
      */
     if (dev->state != OPENUSBFXS_STATE_IDLE) {
-	spin_unlock_irqrestore (&dev->sttlock, flags);
+	spin_unlock_irqrestore (&dev->statelck, flags);
         return;
     }
     dev->state = OPENUSBFXS_STATE_INIT;
     dev->hook  = 0;
     dev->dtmf  = 0;
-    spin_unlock_irqrestore (&dev->sttlock, flags);
+    spin_unlock_irqrestore (&dev->statelck, flags);
 
 init_restart:
     /* return if driver is unloading */
@@ -1511,8 +1650,8 @@ init_restart:
 
     if (sts == -ETIMEDOUT) timeouts++;
     if (timeouts == 5) {
-	err ("%s: openusbfxs#%d not responding, will keep trying", __func__,
-	  dev->intf->minor);
+	OPENUSBFXS_ERR ("%s: openusbfxs#%d not responding, will keep trying",
+	  __func__, dev->intf->minor);
     }
 
     /* loop until board replies and reports a reasonable value for DR11 */
@@ -1623,6 +1762,7 @@ init_restart:
 	dr_read (sts, 82, drval, init_restart);	/* read sensed voltage	*/
 	drval = drval * 376 / 1000;		/* convert to volts	*/
 	if (drval >= 60) goto init_dcdc_ok;
+	OPENUSBFXS_WARN ("%s: measured dc voltage is %d V", __func__, drval);
     }
     dump_direct_regs ("dc-dc converter failed", dev);
 
@@ -1633,7 +1773,8 @@ init_restart:
 	      __func__);
 	    return;
 	}
-	err ("%s: openusbfxs#%d dc-dc converter failure, will keep trying",
+	OPENUSBFXS_ERR (
+	  "%s: openusbfxs#%d dc-dc converter failure, will keep trying",
 	  __func__, dev->intf->minor);
     }
     goto init_restart;
@@ -1666,7 +1807,8 @@ init_dcdc_ok:
 	    OPENUSBFXS_DEBUG (OPENUSBFXS_DBGTERSE, "%s: early exit", __func__);
 	    return;
 	}
-	err ("%s: openusbfxs#%d calibration1 failure, will keep trying",
+	OPENUSBFXS_ERR (
+	  "%s: openusbfxs#%d calibration1 failure, will keep trying",
 	  __func__, dev->intf->minor);
     }
     goto init_restart;
@@ -1683,7 +1825,8 @@ init_clb1_ok:
 	if (drval == 0) break;
     }
     if (drval != 0) {
-	warn ("%s: openusbfxs#%d Q5 cur. manual calibration failed, DR88=%d",
+	OPENUSBFXS_WARN (
+	  "%s: openusbfxs#%d Q5 cur. manual calibration failed, DR88=%d",
 	  __func__, dev->intf->minor, drval);
 	goto init_restart;
     }
@@ -1697,7 +1840,8 @@ init_clb1_ok:
 	if (drval == 0) break;
     }
     if (drval != 0) {
-	warn ("%s: openusbfxs#%d Q6 cur. manual calibration failed, DR89=%d",
+	OPENUSBFXS_WARN (
+	  "%s: openusbfxs#%d Q6 cur. manual calibration failed, DR89=%d",
 	  __func__, dev->intf->minor, drval);
 	goto init_restart;
     }
@@ -1720,7 +1864,8 @@ init_clb1_ok:
 	    OPENUSBFXS_DEBUG (OPENUSBFXS_DBGTERSE, "%s: early exit", __func__);
 	    return;
 	}
-	err ("%s: openusbfxs#%d off-hook during calibration, will keep trying",
+	OPENUSBFXS_ERR (
+	  "%s: openusbfxs#%d off-hook during calibration, will keep trying",
 	  __func__, dev->intf->minor);
     }
     goto init_restart;
@@ -1795,8 +1940,11 @@ init_onhook:
     
     /* select PCM ulaw, enable PCM I/O and set txs/rxs */
     dr_write_check (sts, 1, 0x28, drval, init_restart);
+#if 1
+    /* already set to zero, #if'ed in to set to 1 */
     dr_write_check (sts, 2, 0x01, drval, init_restart); /* txs lowb set to 1 */
     dr_write_check (sts, 4, 0x01, drval, init_restart); /* rxs lowb set to 1 */
+#endif
 
     /* set line mode to forward active */
     dr_write (sts, 64, 0x01, drval, init_restart);
@@ -1806,9 +1954,9 @@ init_onhook:
     dump_direct_regs ("finally", dev);
 
     /* mark our state as OK */
-    spin_lock_irqsave (&dev->sttlock, flags);
+    spin_lock_irqsave (&dev->statelck, flags);
     dev->state = OPENUSBFXS_STATE_OK;
-    spin_unlock_irqrestore (&dev->sttlock, flags);
+    spin_unlock_irqrestore (&dev->statelck, flags);
 
     /* tell the board to start PCM I/O */
     start_stop_io (dev, 0);
@@ -1858,15 +2006,17 @@ static int openusbfxs_probe (struct usb_interface *intf,
     /* allocate memory for our device state */
     dev = kzalloc (sizeof (*dev), GFP_KERNEL);	/* (note: may sleep) */
     if (!dev) {
-    	err ("Out of memory while allocating device state");
+    	OPENUSBFXS_ERR ("Out of memory while allocating device state");
 	goto probe_error;
     }
 
     /* initialize  device state reference and locking structures */
     kref_init (&dev->kref);
     mutex_init (&dev->iomutex);
-    spin_lock_init (&dev->errlock);
-    spin_lock_init (&dev->sttlock);
+    mutex_init (&dev->rdmutex);
+    mutex_init (&dev->wrmutex);
+    spin_lock_init (&dev->statslck);
+    spin_lock_init (&dev->statelck);
 
     /* initialize wait queues */
 
@@ -1950,21 +2100,22 @@ static int openusbfxs_probe (struct usb_interface *intf,
 
 	/* complain (but don't fail) on other EPs */
 	else {
-	    err ("Unexpected endpoint #%d", epd->bEndpointAddress);
+	    OPENUSBFXS_ERR ("Unexpected endpoint #%d", epd->bEndpointAddress);
 	}
     }
 
     /* at end of loop, make sure we have found all four required endpoints */
     if (!(dev->ep_bulk_in && dev->ep_bulk_out &&
       dev->ep_isoc_in && dev->ep_isoc_out)) {
-        err ("Board does not support all required bulk/isoc endpoints??");
+        OPENUSBFXS_ERR (
+	  "Board does not support all required bulk/isoc endpoints??");
 	goto probe_error;
     }
 
     /* tell USB core's PM we do not want to have the device autosuspended */
     retval = usb_autopm_get_interface (intf);
     if (retval) {
-        err ("Call to autopm_get_interface failed with %d", retval);
+        OPENUSBFXS_ERR ("Call to autopm_get_interface failed with %d", retval);
 	goto probe_error;
     }
 
@@ -1974,7 +2125,7 @@ static int openusbfxs_probe (struct usb_interface *intf,
     /* try registering the device with the USB core */
     retval = usb_register_dev (intf, &openusbfxs_class);
     if (retval) {
-    	err ("Unable to register device and get a minor");
+    	OPENUSBFXS_ERR ("Unable to register device and get a minor");
 	usb_set_intfdata (intf, NULL);
 	goto probe_error;
     }
@@ -1992,7 +2143,8 @@ static int openusbfxs_probe (struct usb_interface *intf,
 	/* allocate urb */
 	dev->outbufs[i].urb = usb_alloc_urb (wpacksperurb, GFP_KERNEL);
 	if (dev->outbufs[i].urb == NULL) {
-	    err ("Out of memory while allocating isochronous OUT urbs");
+	    OPENUSBFXS_ERR (
+	      "Out of memory while allocating isochronous OUT urbs");
 	    retval = -ENOMEM;
 	    goto probe_error;
 	}
@@ -2000,7 +2152,8 @@ static int openusbfxs_probe (struct usb_interface *intf,
 	dev->outbufs[i].buf = usb_buffer_alloc (dev->udev,OPENUSBFXS_MAXOBUFLEN,
 	  GFP_KERNEL, &dev->outbufs[i].urb->transfer_dma);
 	if (dev->outbufs[i].buf == NULL) {
-	    err ("Out of memory while allocating isochronous OUT buffers");
+	    OPENUSBFXS_ERR (
+	      "Out of memory while allocating isochronous OUT buffers");
 	    retval = -ENOMEM;
 	    goto probe_error;
 	}
@@ -2037,7 +2190,8 @@ static int openusbfxs_probe (struct usb_interface *intf,
 	/* allocate urb */
 	dev->in_bufs[i].urb = usb_alloc_urb (rpacksperurb, GFP_KERNEL);
 	if (dev->in_bufs[i].urb == NULL) {
-	    err ("Out of memory while allocating isochronous IN urbs");
+	    OPENUSBFXS_ERR (
+	      "Out of memory while allocating isochronous IN urbs");
 	    retval = -ENOMEM;
 	    goto probe_error;
 	}
@@ -2045,7 +2199,8 @@ static int openusbfxs_probe (struct usb_interface *intf,
 	dev->in_bufs[i].buf = usb_buffer_alloc (dev->udev,OPENUSBFXS_MAXIBUFLEN,
 	  GFP_KERNEL, &dev->in_bufs[i].urb->transfer_dma);
 	if (dev->in_bufs[i].buf == NULL) {
-	    err ("Out of memory while allocating isochronous IN buffers");
+	    OPENUSBFXS_ERR (
+	      "Out of memory while allocating isochronous IN buffers");
 	    retval = -ENOMEM;
 	    goto probe_error;
 	}
@@ -2071,12 +2226,18 @@ static int openusbfxs_probe (struct usb_interface *intf,
     /* create a unique name for our workqueue, then create the queue itself */
     sprintf (wqname, "openusbfxs%d", intf->minor);
     dev->iniwq = create_singlethread_workqueue (wqname);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,20)
+    /* workqueue kernel API changed in 2.6.20 */
     INIT_WORK (&dev->iniwt, openusbfxs_setup);
+#else
+    INIT_WORK (&dev->iniwt, openusbfxs_setup, dev);
+#endif
     if (!queue_work (dev->iniwq, &dev->iniwt)) {
-	err("in %s, queue_work() returns zero (already queued)", __func__);
+	OPENUSBFXS_ERR (
+	  "in %s, queue_work() returns zero (already queued)", __func__);
     }
 
-    info ("OpenUSBFXS device attached to openusbfxs#%d", intf->minor);
+    OPENUSBFXS_INFO ("OpenUSBFXS device attached to openusbfxs#%d", intf->minor);
     return 0;
 
 probe_error:
@@ -2125,13 +2286,13 @@ static void openusbfxs_disconnect (struct usb_interface *intf)
      * need to alter the state to tell read(), write() and ioctl() that
      * they should fail
      */
-    spin_lock_irqsave (&dev->sttlock, flags);
+    spin_lock_irqsave (&dev->statelck, flags);
     dev->state = OPENUSBFXS_STATE_UNLOAD;
-    spin_unlock_irqrestore (&dev->sttlock, flags);
+    spin_unlock_irqrestore (&dev->statelck, flags);
     wake_up_interruptible (&dev->in_wqueue);
     wake_up_interruptible (&dev->outwqueue);
 
-    /* return our minor back to the kernel (via USB core) */
+    /* return our minor dev back to the kernel (via USB core) */
     usb_deregister_dev (intf, &openusbfxs_class);
 
     /* prevent any filesystem-based I/O from starting, unset link to USB */
@@ -2142,7 +2303,7 @@ static void openusbfxs_disconnect (struct usb_interface *intf)
     usb_kill_anchored_urbs(&dev->submitted);
     kref_put (&dev->kref, openusbfxs_delete);
 
-    info("openusbfxs#%d is now disconnected", minor);
+    OPENUSBFXS_INFO ("openusbfxs#%d is now disconnected", minor);
 }
 
 /* interesting compiler tags:
@@ -2187,7 +2348,7 @@ static int __init openusbfxs_init(void)
 
     retval = usb_register (&openusbfxs_driver);
     if (retval) {
-        err ("usb_register failed, error=%d", retval);
+        OPENUSBFXS_ERR ("usb_register failed, error=%d", retval);
     }
 
     // return values other than 0 are errors, see <linux/errno.h>

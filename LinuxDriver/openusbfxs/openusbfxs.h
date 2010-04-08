@@ -47,6 +47,12 @@
 #define OPENUSBFXS_DEBUG(level, fmt, args...)	\
     if (debuglevel >= (level)) \
       printk (OPENUSBFXS_FACILITY KBUILD_MODNAME ": " fmt "\n", ## args)
+#define OPENUSBFXS_ERR(fmt, args...) \
+    printk (KERN_ERR KBUILD_MODNAME ": " fmt "\n", ## args)
+#define OPENUSBFXS_WARN(fmt, args...) \
+    printk (KERN_WARNING KBUILD_MODNAME ": " fmt "\n", ## args)
+#define OPENUSBFXS_INFO(fmt, args...) \
+    printk (KERN_INFO KBUILD_MODNAME ": " fmt "\n", ## args)
 #else /* DEBUGGING */
 #define OPENUSBFXS_DEBUG(level, fmt, args...)
 #endif /* DEBUGGING */
@@ -64,6 +70,17 @@
 
 #endif /* __KERNEL__ */
 
+/* returned by OPENUSBFXS_IOCGSTATS */
+struct openusbfxs_stats {
+    int errors;
+    enum {none, err_in, err_out} lasterrop;
+    ulong in_overruns;
+    ulong in_missed;
+    ulong in_badframes;
+    ulong out_underruns;
+    ulong out_missed;
+};
+
 /* openusbfxs magic ioctl number */
 #define OPENUSBFXS_IOC_MAGIC	'X'
 
@@ -72,13 +89,15 @@
 /* cause a register dump (requires compilation with DEBUG set to VERBOSE) */
 #define OPENUSBFXS_IOCREGDMP	_IO(OPENUSBFXS_IOC_MAGIC, 1)
 /* set ringing on/off: zero sets ring off, non-zero sets ring on */
-#define OPENUSBFXS_IOCSRING	_IOW(OPENUSBFXS_IOC_MAGIC, 2, int)
+#define OPENUSBFXS_IOCSRING	_IO(OPENUSBFXS_IOC_MAGIC, 2)
 /* set linefeed mode: zero is 'open' mode; non-zero is 'forward active' mode */
-#define OPENUSBFXS_IOCSLMODE	_IOW(OPENUSBFXS_IOC_MAGIC, 3, int)
+#define OPENUSBFXS_IOCSLMODE	_IO(OPENUSBFXS_IOC_MAGIC, 3)
 /* get hook state: returns zero if on-hook, one if off-hook */
 #define OPENUSBFXS_IOCGHOOK	_IOR(OPENUSBFXS_IOC_MAGIC, 4, int)
 /* generic event (hook state or DTMF): 0 is no event, others ??? */
 #define OPENUSBFXS_IOCGDTMF	_IOR(OPENUSBFXS_IOC_MAGIC, 5, int)
-#define OPENUSBFXS_MAX_IOCTL	5
+/* get and reset statistics on errors etc. */
+#define OPENUSBFXS_IOCGSTATS	_IOR(OPENUSBFXS_IOC_MAGIC, 6, struct openusbfxs_stats)
+#define OPENUSBFXS_MAX_IOCTL	6
 
 #endif /* OPENUSBFXS_H */

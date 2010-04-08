@@ -4,6 +4,9 @@
 # define DEBUG_GET_PSOUT	0x41
 # define DEBUG_GET_PSWRD	0x42
 
+# define START_STOP_ISO		0x7e
+# define SOF_PROFILE		0x7f
+
 # define PROSLIC_SCURRENT	0x80
 # define PROSLIC_RCURRENT	0x81
 # define PROSLIC_RDIRECT	0x82

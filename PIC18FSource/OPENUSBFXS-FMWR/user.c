@@ -256,6 +256,8 @@ void ProcessIO(void)
 void ServiceRequests(void) {
     BYTE index;
     WORD indval;
+    unsigned short i;			// general-purpose counter
+    BYTE *bp;
     
     //Check to see if data has arrived
     if(!USBHandleBusy(USBGenericOutHandle)) {        
@@ -395,6 +397,34 @@ void ServiceRequests(void) {
 
 
 		break;
+	    case SOF_PROFILE:
+		PIE1bits.TMR1IE = 0;	// temporarily disable TMR1 interrupts
+		for (i = 0; i < 65535; i++) ;       // wait for TIMR1 to expire
+		
+		INPacket.len = USBGEN_EP_SIZE;
+		for (bp = &INPacket._byte[2]; bp < &INPacket._byte[USBGEN_EP_SIZE]; bp++) {
+		    UIRbits.SOFIF = 0;		// clear SOF interrupt flag
+		    while (!(UIRbits.SOFIF));	// wait until it is reasserted
+		    *bp = TMR3L;		// and note down TMR3's value
+		    bp++;
+		    *bp = TMR3H;
+		}
+    		
+		PIE1bits.TMR1IE = 1;	// re-enable TMR1 interrupts
+		PIR1bits.TMR1IF = 0;	// clear TMR1 interrupt flag if set
+		tmr1_isr_init ();	// re-initialize TMR1 data and signals
+
+		// wait for PCLK signal to become available, then reset 3210
+		for (i = 0; i < 65535; i++) ;       // wait for TIMR1 to fire
+		_cs_3210 = 1;		// deselect the 3210 chip
+		_reset_3210 = 0;	// reset the 3210 chip
+		for (i = 0; i < 4096; i++) ;        // wait some time
+		_reset_3210 = 1;	// set the chip to the not reset state
+
+		counter = USBGEN_EP_SIZE;
+
+	    	break;
+
 //////////////// END contributed code by avarvit
 
             case RESET:

@@ -10,6 +10,8 @@ main () {
     int t = 0;
     int h;
     int k;
+    struct openusbfxs_stats s;
+
     if ((d = open ("testfour.ulaw", O_CREAT|O_WRONLY|O_TRUNC, 0644)) < 0) {
         perror ("open testfour.ulaw failed");
 	exit (1);
@@ -70,6 +72,17 @@ main () {
 	}
 	if (k) {
 	    printf ("DTMF key pressed: %c\n", k);
+	}
+	/* every 8192 bytes (~1 sec) print out statistics */
+	if (!(t & 0x1fff)) {
+	    if ((i = ioctl (o, OPENUSBFXS_IOCGSTATS, &s)) < 0) {
+		perror ("IOCGSTATS failed");
+		exit (1);
+	    }
+	    printf (
+	      "IN OVR: %d, IN_MSS: %d, IN_BAD: %d, OUTUND: %d, OUTMSS: %d\n",
+	      s.in_overruns, s.in_missed, s.in_badframes,
+	      s.out_underruns, s.out_missed);
 	}
     }
     printf ("A total of %d bytes were read and saved\n", t);

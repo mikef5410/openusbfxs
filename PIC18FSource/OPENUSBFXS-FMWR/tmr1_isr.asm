@@ -90,8 +90,8 @@ EP2OOST	EQU	0x424
 	GLOBAL		passout		; a debug return value
 	GLOBAL		pasHout		; a debug return value (for WORDs)
 	GLOBAL		pauseIO		; pause USB I/O
-	GLOBAL		inisync		; intial SOF sync
 	GLOBAL		hkdtmf		; hook and DTMF status
+	GLOBAL		seensof		; flag, true if we have seen a SOF
 
 	; these are exposed ONLY for debugging, they should not
 	; be touched from the outside world, or bad things will
@@ -155,10 +155,14 @@ cnt4	RES		1		; counts 4x8 invocations
 	; debugging return value
 passout	RES		1		; variable to pass out debugging info
 pasHout	RES		1		; variable to pass out debugging info
-inisync	RES		1		; variable for doing initial SOF sync
+
+	; Hook and DTMF state
 hkdtmf	RES		1		; set in user.c, holds hook/DTMF status
 
-	; temporary storage for FSR1's value
+	; Flags seen SOF at least once
+seensof	RES		1
+
+	; temporary storage for FSR1 and FSR2
 sfsr1l	RES		1		; FSR1L temp save space
 sfsr1h	RES		1		; FSR1H temp save space
 sfsr2l	RES		1		; FSR2L temp save space
@@ -241,6 +245,13 @@ firstof32					; T:@+11
 ;	a PCLK-high half-cycle of 23TCy in duration (PCLK lowered at @+23)
 
 
+; HEREHERE: fix doc
+
+	; task (*): lower FSYNC
+
+	BCF		pcm_3210_fsync, ACCESS	; C:1
+
+						; T:@+12
 	; task (i): prepare the DRX signal (our output -- must
 	; be ready before the falling edge of PCLK)
 
@@ -254,7 +265,7 @@ firstof32					; T:@+11
       #endif
 	BRA		fo32_DRX_ok		; C:2 done
 
-fo32_clr_DRX					; T:@+14
+fo32_clr_DRX					; T:@+15
 
       #ifdef TEST_PCM_TIMING
 	BTG		pcm_3210_drx, ACCESS	; (C:1) just toggle (for tests)
@@ -264,39 +275,59 @@ fo32_clr_DRX					; T:@+14
 	NOP					; C:1 make both paths' delay eq.
 	
 
-fo32_DRX_ok					; T:@+16 via both paths
+fo32_DRX_ok					; T:@+17 via both paths
 
 	; task (ii): re-arm TMR1 to fire again at @+46-5
 	SETF		TMR1H, ACCESS		; C:1 set TMR1H to 0xFF
-	MOVLW		235			; C:1 next interrupt at @+46-5
+	MOVLW		236			; C:1 next interrupt at @+46-5
 	MOVWF		TMR1L, ACCESS		; C:1
 
-						; T:@+19
+						; T:@+20
 
 	; task (iii): initialize the DTX PCM byte to zero
 	CLRF		byteDTX, BANKED		; C:1 clear byteDTX
 
-						; T:@+20
+						; T:@+21
 
 	; task (iv): collect our PCM input from the DTX signal
 	BTFSC		pcm_3210_dtx, ACCESS	; C:1/2 skip next if DTX is 0
 	BSF		byteDTX, 0, BANKED	; C:1 if 1, set bit 0 of byteDTX
 
-						; T:@+22 via both paths
+						; T:@+23 via both paths
 
 	; task (v): wait until T:@+23, then lower PCLK
-	NOP					; C:1
 						; T:@+23
+
 	BCF		pcm_3210_pclk, ACCESS	; C:1 lower PCLK
+
+						; T:@+24
+
+	; task (vi): lower FSYNC
+	;NOP					; C:1
+	;NOP					; C:1
+	;NOP					; C:1
+	;NOP					; C:1
+	;NOP					; C:1
+	;NOP					; C:1
+	;NOP					; C:1
+	;NOP					; C:1
+	;NOP					; C:1
+	;NOP					; C:1
+	;NOP					; C:1
+
+	;BCF		pcm_3210_fsync, ACCESS	; C:1
+
+	;					; T:@+30
 
 	; finished with all of our tasks, time to return
 	RETFIE		FAST			; C:2
 
 
 
-;	We get here if is the first cnt4 round (cnt4==0). We need to
+;	We get here if this is not the first cnt8 round (cnt8<>0). We need to
 ;	check if cnt4==0, in which case we 'll do PCM I/O and the other
-;	cases. <task description>
+;	cases.
+;	FIXDOC: <task description>
 notfirstof8					; T:@+8
 
 	DECF		cnt4, W, BANKED		; C:1 W:=cnt4-1; if cnt4<>0, the
@@ -370,65 +401,168 @@ notfirst8of32					; T:@+11
 	BNZ		notlastof32		; C:1/2
 
 	; (following label is just for clarity, there is not any jump into it)
-raiseFSYNC					; T:@+15
+lastof32					; T:@+15
       #ifdef DEBUG_CYCLES
-	; NOTE: this adds extra cycles to the ISR, so it's good just
-	; once, just before the point that needs to be measured.
+
+	#if 0
+	; NOTE: this block adds extra cycles to the ISR, so it's good just
+	; once, just before the point that needs to be measured. It's if'ed
+	; out here, so it won't be included even if DEBUG_CYCLES is defined;
+	; if testing, you must copy-paste it to the appropriate point in the
+	; ISR code; if it is for 'lastcycle' (here), it should be if'ed back
+	; in (for testing purposes only)
       	MOVF		TMR3L, W, ACCESS
 	MOVWF		passout, BANKED
       	MOVF		TMR3H, W, ACCESS
 	MOVWF		pasHout, BANKED
-      #endif
+	#endif
 
-	; task (i): raise FSYNC
-	; Timing: the timing diagram on p.16 of the 3210 datasheet requires
-	;	  FSYNC to be raised 25ns before the falling edge of PCLK.
-	;	  We are definitely safe here.
-	BSF		pcm_3210_fsync, ACCESS	; C:1
+						; T:@+15
+
+	NOP					; C:1
 
 						; T:@+16
-	; task (ii): re-arm TMR1 to fire at @+47-5
+
+	; task (i): re-arm TMR1 to fire at @+47-5
 	SETF		TMR1H, ACCESS		; C:1 set TMR1H to 0xFF
 	MOVLW		234			; C:1 next interrupt at @+47-5
 	MOVWF		TMR1L, ACCESS		; C:1
 
 						; T:@+19
 
-	; task (iii): wait until time @+24, then lower PCLK
-      #ifdef DEBUG_CYCLES
+	; task (ii): while waiting until time @+24 in order to lower PCLK,
 	; synchronize TMR3 with TMR1, so that TMR3 will be zero at time @
 	; on next (cnt4==cnt8==0)
       	SETF		TMR3H, ACCESS		; C:1
       	MOVLW		231			; C:1
 	MOVWF		TMR3L, ACCESS		; C:1
+	BSF		pcm_3210_fsync, ACCESS	; C:1
+	;NOP					; C:1
 	NOP					; C:1
-	NOP					; C:1
-      #else
-	NOP					; C:1
-	NOP					; C:1
-	NOP					; C:1
-	NOP					; C:1
-	NOP					; C:1
-      #endif
 
 						; T:@+24
 
-	; task (iv): lower PCLK
+	; task (iii): lower PCLK
 	BCF		pcm_3210_pclk, ACCESS	; C:1 lower PCLK
 
-	; task (v): lower FSYNC
-	; Timing: the timing diagram on p.16 of the 3210 datasheet requires
-	;	  FSYNC to be held up at least 20ns after the falling edge
-	;	  of PCLK. One TCy is 83.33+ ns, so we are safe lowering
-	;	  FSYNC at the next PIC instruction after lowering PCLK.
+        ; done
+	RETFIE		FAST			; C:2
+
+      #else ; DEBUG_CYCLES
+      						; T:@+15
+
+	INCF		ppindex, W, BANKED	; is ppindex about to overflow?
+	BTFSC		WREG, 3, ACCESS		; C:1/2
+	BRA		lastnosync		; C:2
+
+      						; T:@+18
+
+	; (following label is just for clarity, there is not any jump into it)
+syncSOF
+	; task (i): check if we have seen SOF at least once so far
+	BTFSC		seensof, 0, BANKED	; C:1/2 if SOF seen before,
+	BRA		dosyncSOF		; C:2  branch forward
+
+						; T:@+20
+
+	; task (ii): never seen SOF before, check if it is asserted now,
+	; and if so, set seensof for next round
+	BTFSC		UIR, SOFIF, ACCESS	; C:1/2 
+	SETF		seensof, BANKED		; C:1
+
+						; T:@+22 via both paths
+
+	; task (iii): wait until @+24, then lower PCLK
+	BSF		pcm_3210_fsync, ACCESS	; C:1
+	;NOP					; C:1
+	NOP
+
+						; T:@+24
+
+	BCF		pcm_3210_pclk, ACCESS	; C:1
+
+	; task (iv): re-arm TMR1 to fire again at @+47-5
 
 						; T:@+25
-	
-	BCF		pcm_3210_fsync, ACCESS	; C:1
+
+	SETF		TMR1H, ACCESS		; C:1 set TMR1H to 0xFF
+	MOVLW		243			; C:1 next interrupt at @+47-5
+	MOVWF		TMR1L, ACCESS;		; C:1
 
 
 	; done
 	RETFIE		FAST			; C:2
+
+
+dosyncSOF					; T:@+21
+
+	; task (i): wait until @+24, then lower PCLK
+	NOP					; C:1
+	BSF		pcm_3210_fsync, ACCESS	; C:1
+	NOP					; C:1
+	;NOP					; C:1
+
+						; T:@+24
+
+	BCF		pcm_3210_pclk, ACCESS	; C:1
+
+
+						; T:@+25
+
+	; task (ii): synchronize with SOF
+waitSOF
+SOFloop	BTFSS		UIR, SOFIF, ACCESS	; C:1/2 break loop if SOF is set
+	BRA		SOFloop			; C:2 otherwise loop waiting
+	BCF		UIR, SOFIF, ACCESS	; C:1 clear SOFIF for next time
+
+	
+	; after the loop, T can be anything, but it cannot be less than @+28;
+	; initially, we can safely assume that SOF will be have been set at
+	; some time before now, so @+28 will rather be the rule the first time
+	; we go through this code; with this assumption, we shall 'steal'
+	; 0.5 microseconds from the ISR's time, by pretending that T is now
+	; equal to @+34 and re-arming TMR1 accordingly; this will result
+	; in the ISR executing at a somewhat faster pace than SOF; thus,
+	; the point in time at which SOF is set during the execution of
+	; the ISR will drift slowly and occur later and later, until
+	; eventually 'waitSOF' will be reached slightly before SOF is set;
+	; this will result in the code looping until SOF appears,
+	; so effectively we will have synchronized with SOF!
+
+						; T:@+34 (fake)
+	; task (v): re-arm TMR1 and return
+	SETF		TMR1H, ACCESS		; C:1
+	MOVLW		252			; C:1
+	MOVWF		TMR1L, ACCESS		; C:1
+
+						; T:@+37 (fake)
+	; done
+	RETFIE		FAST			; C:2
+
+
+
+	; we jump here in 7 out of 8 invocations, when we do not need to
+	; do SOF synchronization, so we just re-arm TMR1 and return
+lastnosync					; T:@+19
+	;
+	; task (i): re-arm TMR1 to fire at @+47-5
+	SETF		TMR1H, ACCESS		; C:1
+	MOVLW		237			; C:1
+	MOVWF		TMR1L, ACCESS		; C:1
+
+						; T:@+22
+	; task (ii): wait until @+24, then lower PCLK
+	BSF		pcm_3210_fsync, ACCESS	; C:1
+	;NOP					; C:1
+	NOP					; C:1
+
+						; T:@+24
+
+	BCF		pcm_3210_pclk, ACCESS	; C:1
+
+	; done
+	RETFIE		FAST			; C:2
+      #endif ; DEBUG_CYCLES
 
 
 
@@ -624,45 +758,16 @@ usbIN_evn					; T:@+26
 
 	; if we are (re) synchronizing with the SOF frame, don't do the
 	; actual transmit;
-	BTFSC		inisync, 0, BANKED	; C:1/2 do initial sync?
+	; will have to remove stuff here; patched with a NOP to keep timing
+	;BTFSC		inisync, 0, BANKED	; C:1/2 do initial sync?
+	NOP
 	BRA		nosyncevn		; C:2 skip initial sync if not
 
 
-;	The following code synchronizes our TMR1 ISR with the SOF frame that
-;	the host keeps sending every millisecond to the board. Notice that
-;	this synchronization destroys the ISR's time schedule, and might
-;	cause trouble to the 3210 because PCLK pulsing is halted for quite
-;	a long time. So this should occur only once, during initialization.
-;	Note that 1 ms = 12,000 TCy, which is (375 * 4) * 8 (that is 8 full
-;	ISR cycles, one for each PCM data byte). So, hereon, the ISR should
-;	remain fully synchronized with the SOF pace!
-
-	; clear SOF interrupt flag, then wait for SIE hardware to re-assert it
-	BCF		UIR, SOFIF, ACCESS	; C:1 clear SOF interrupt flag
-waitSOF	BTFSS		UIR, SOFIF, ACCESS	; C:1 break loop if SOF is set
-	BRA		waitSOF			; C:2 otherwise loop waiting
-						;     for SOF flag to come up
-
-						; T:? (initial time lost) SOF+2
-#if 0
-	; delay somewhat (testing...)
-	MOVLW		40
-smdelay	DECFSZ		WREG, ACCESS
-	BRA		smdelay
-#endif
-
-;	Now that we have synchronized with the SOF frame, proceed ASAP
-;	to the data send task right below. Since the PIC and the USB
-;	clocks should be 100% synchronized, and provided that our TMR1
-;	ISR does not miss any clock cycles at all, we should never again
-;	need to synchronize with the SOF. That is, isochronous IN should
-;	forever now on occur at about 15 TCy (eqv., 1.25 microseconds)
-;	after the SOF frame (which is fast enough for the packet to be
-;	received correctly by the host)!
-
 nosyncevn					; T:@+29
-	; clear the SOF flag
-	BCF		UIR, SOFIF, ACCESS	; C:1 clear SOF interrupt flag
+	; clear the SOF flag - REMOVED
+	NOP
+	;BCF		UIR, SOFIF, ACCESS	; C:1 clear SOF interrupt flag
 
 						; T:@+30
 
@@ -738,8 +843,8 @@ atpls43						; T:@+43
 
 
 usbIN_odd					; T:@+27
-	; clear the SOF flag
-	BCF		UIR, SOFIF, ACCESS;	C:1 clear SOF interrupt flag
+	; clear the SOF flag - REMOVED
+	NOP
 
 						; T:@+28
 	BTFSC		pauseIO, 0, BANKED	; C:1/2
@@ -1099,6 +1204,7 @@ usbOUToddNoData					; T:@+28
 ;	Following code section is relocatable
 tmr1isrinit CODE
 
+
 ; The TMR1 ISR initialization function
 tmr1_isr_init
 
@@ -1119,16 +1225,19 @@ tmr1_isr_init
 
 	CLRF		passout, BANKED		; set passout to 0
 
-	CLRF		pauseIO			; disable USB I/O (FIXME/NOTYET)
+	CLRF		pauseIO, BANKED		; disable USB I/O (FIXME/NOTYET)
 
-	SETF		inisync			; do initial sync
+	CLRF		seensof, BANKED		; have not seen SOF yet
 
 	; make sure PCLK and FSYNC are set to zero
 	BCF		pcm_3210_pclk, ACCESS	; lower PCLK
 	BCF		pcm_3210_fsync, ACCESS	; lower FSYNC
 
+	; enable SOFIE
+	BSF		UIE, SOFIE, ACCESS	;
+
 	; re-enable TMR1 interrupts
-	BSF		PIE1, TMR1IE, ACCESS
+	BSF		PIE1, TMR1IE, ACCESS	;
 
 	; done
 	RETURN
