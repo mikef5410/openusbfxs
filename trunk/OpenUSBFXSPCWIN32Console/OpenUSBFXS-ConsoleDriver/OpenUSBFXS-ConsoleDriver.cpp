@@ -556,11 +556,13 @@ start_over:
 
 	printf ("OpenUSBFXS driver: starting up...\n");
 
-//	SofProfile ();
-//	SofProfile ();
-//	SofProfile ();
-//	SofProfile ();
-//	exit (0);
+#if 0
+	SofProfile ();
+	SofProfile ();
+	SofProfile ();
+	SofProfile ();
+	exit (0);
+#endif
 
 	ShowDirectRegisters ();
 	
@@ -892,10 +894,8 @@ start_over:
 	// enable PCM u-law, disable PCM I/O
 	if (!WriteAndShowDR (1, &RegValue, 0x08, false)) goto start_over;
 	// set the TXS and RXS registers to 1
-#if 0	// fixed in firmware
 	if (!WriteAndShowDR (2, &RegValue, 0x01, false)) goto start_over;
 	if (!WriteAndShowDR (4, &RegValue, 0x01, false)) goto start_over;
-#endif
 	printf ("OpenUSBFXS Driver: done with PCM initializations.\n");
 
 	printf ("\n\nOpenUSBFXS Driver: all intializations complete!\n\n");

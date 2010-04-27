@@ -1,0 +1,6 @@
+DAHDI_INCLUDE := $(src)/../../../include
+CFLAGS_oufxs.o += -I$(DAHDI_INCLUDE)
+KBUILD_EXTRA_SYMBOLS := ($src)/../Modules.symvers
+
+obj-m += oufxs.o
+
