@@ -64,6 +64,7 @@ typedef enum
     */
 
     // set isochronous IO on/off
+    START_STOP_ISOV2= 0x7d,	// v2 adds a sequence number for setting DRs
     START_STOP_ISO  = 0x7e,
     // perform SOF calibration
     SOF_PROFILE     = 0x7f,

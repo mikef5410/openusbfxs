@@ -1893,7 +1893,8 @@ init_onhook:
     for (j = 88; j <= 95; j++) {
 	ir_write (sts, j, 0, irval, init_restart);
     }
-    ir_write (sts, j, 97, irval, init_restart);
+    // ! BUG!! ir_write (sts, j, 97, irval, init_restart);
+    ir_write (sts, 97, 0, irval, init_restart);
     for (j = 193; j <= 211; j++) {
 	ir_write (sts, j, 0, irval, init_restart);
     }

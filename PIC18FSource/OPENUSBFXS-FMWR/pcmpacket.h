@@ -12,7 +12,8 @@
        I have #if'ed out this comments part. These are the various fields in
        the PCM headers. Fields are different for the even and odd packets; in
        general, odd ones contain more debugging information. The only really
-       important field is the DTMF and hook state.
+       important fields are the DTMF and hook state in IN packets and the
+       piggyback register setting in OUT packets
 
 #endif
 
@@ -32,3 +33,12 @@
 #define	IN_ODD_LOSSES	IN_PCMData1 + 6
 #define IN_EVN_SERIAL	IN_PCMData0 + 7
 #define IN_ODD_SERIAL	IN_PCMData1 + 7
+
+#define OUT_0_SERIAL	OUTPCMData0 + 3
+#define OUT_1_SERIAL	OUTPCMData1 + 3
+#define OUT_0_DRSSEQ	OUTPCMData0 + 4
+#define OUT_1_DRSSEQ	OUTPCMData1 + 4
+#define OUT_0_DRSREG	OUTPCMData0 + 5
+#define OUT_1_DRSREG	OUTPCMData1 + 5
+#define OUT_0_DRSVAL	OUTPCMData0 + 6
+#define OUT_1_DRSVAL	OUTPCMData1 + 6

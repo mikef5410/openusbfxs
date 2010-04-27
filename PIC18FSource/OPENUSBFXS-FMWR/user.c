@@ -74,6 +74,7 @@ void ServiceRequests(void);
 /** D E C L A R A T I O N S **************************************************/
 #pragma udata
 extern BYTE pauseIO, cnt4, cnt8, passout, pasHout, hkdtmf;
+static BYTE drsena, drsseq;
 #pragma code
 
 #pragma code
@@ -157,6 +158,10 @@ void UserInit(void) {
     // set the ISR function to transmit data
     pauseIO = 0;
 
+    // disable setting DRs from PCM data
+    drsena = 0;
+    drsseq = 0;
+
     // set hkdtmf to a known value
     hkdtmf = 0;
 //////////////// END contributed code by avarvit
@@ -186,10 +191,12 @@ void ProcessIO(void)
     // User Application USB tasks
     if((USBDeviceState < CONFIGURED_STATE)||(USBSuspendControl==1)) return;
 
+    // service 3210 interrupts that indicate hook change or DTMF events
+
     if (!_int_3210) {
 	// interrupts (should) occur only on hook state changes or DTMF detect
 
-	// Debugging
+	// Debugging -- don't comment back in
 	// BYTE DR18 = ReadProSLICDirectRegister (18);
 	// IN_PCMData0[4] = DR18;
 
@@ -221,12 +228,51 @@ void ProcessIO(void)
 		hkdtmf |= (DR24 & 0x1f);		// mask into hkdtmf
 	    }
 	}
+
+
+	// TODO, some day: other 3210 interrupts, although enabled, remain
+	// unserviced; when this happens, the LED flashes very slowly,
+	// because the above code is executed over and over again without
+	// clearing the interrupt; it would be a good idea to provide a
+	// fix to that, by returning a decent hkdtmf value that the
+	// driver would understand, so it would do further debugging,
+	// or even a converter powerdown if a non-transient power-related
+	// interrupt is detected
     }
     else {
+    	// if DTMF was detected in previous round, keep probing DR 24
         if (hkdtmf & 0x10) {				// dtmf detected
 	    DR24 = ReadProSLICDirectRegister (24);	// get DTMF state
 	    if (!(DR24 & 0x10)) {			// still being pressed?
 		hkdtmf &= 0xe0;				// no, reset our state
+	    }
+	}
+    }
+
+    // provide DR setting capability via isochronous packets; sequence
+    // number for DR setting operation, register # and register value
+    // are contained in packet headers
+    if (drsena) {
+	// quickly sample just OUT_0 packet for sequence number changes
+	if (*((BYTE *) OUT_0_DRSSEQ) != drsseq) { // !=, or we risk missing data
+
+	    // do sampling/consistency checks to avoid using unstable data
+	    // (remember that we run asynchronously related to tmr1_isr,
+	    // and that locking is not really available or feasible, so
+	    // robust sampling is the best we can do here)
+
+	    BYTE smplseq, smplreg, smplval;
+	    smplseq = *((BYTE *) OUT_0_DRSSEQ);
+	    smplreg = *((BYTE *) OUT_0_DRSREG);
+	    smplval = *((BYTE *) OUT_0_DRSVAL);
+	    if (
+	      *((BYTE *) OUT_1_DRSSEQ) == smplseq &&
+	      *((BYTE *) OUT_1_DRSREG) == smplreg &&
+	      *((BYTE *) OUT_1_DRSVAL) == smplval) {
+		drsseq = smplseq;
+	    	if (IsValidPROSLICDirectRegister (smplreg)) {
+		    WriteProSLICDirectRegister (smplreg, smplval);
+		}
 	    }
 	}
     }
@@ -353,9 +399,15 @@ void ServiceRequests(void) {
 		counter = 0x04;
 		break;
 
+	    case START_STOP_ISOV2:
+	        drsena = 1;
+		drsseq = OUTPacket._byte[2];	// set the next DR set seq #
+		// intentional slip through
+
 	    case START_STOP_ISO:
 		if (OUTPacket._byte[1]) {
-		    pauseIO = 0xFF;
+		    pauseIO = 0xFF;		// pause PCM I/O
+		    drsena = 0;			// disable setting DRs
 		}
 		else {
 		    IN_PCMData0[0] = 0xBA;	// magic number (low), even pck
