@@ -1,0 +1,39 @@
+oufxs is a Dahdi-compatible (or Dahdi-compliant, if
+you prefer) driver for the Open USB FXS board. To
+try this out, you must have an Open USB FXS board
+available. For details on the project and on how
+to get a board (when boards become available to the
+public), please refer to the project's blog at the
+URL http://openusbfxs.wordpress.com/ .
+
+
+In order to compile and install this module, you must
+first place this directory inside the Dahdi source
+code distribution. If your dahdi source is located in
+say, /usr/src/dahdi-2.x.y.z/, then place this directory
+in /usr/src/dahdi-2.x.y.z/drivers/dahdi/oufxs (or, if
+you prefer, create a new directory named
+/usr/src/dahdi-2.x.y.z/drivers/dahdi/oufxs and copy
+the contents of the current directory in the newly
+created one).
+
+To compile the module, you may try one of the following:
+
+Method 1:
+  $ cd  /usr/src/dahdi-2.x.y.z/drivers/dahdi/oufxs
+  $ make
+
+This may or may not work for you. It really depends on
+the Kbuild environment in your kernel.
+
+
+Method 2 (suggested):
+  $ cd /usr/src/dahdi-2.x.y.z
+  $ make SUBDIRS_EXTRA+=oufxs/
+
+This works on most environments.
+
+Ubuntu uses the dkms system, so you must fiddle with the
+file dkms.conf (found in /usr/src/dahdi-2.x.y.z/) and
+add the "SUBDIRS_EXTRA+=oufxs/" in the make commands in
+dkms.conf.

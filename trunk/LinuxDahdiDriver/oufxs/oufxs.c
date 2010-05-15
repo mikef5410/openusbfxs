@@ -57,6 +57,15 @@ static char *driverversion = "0.1-dahdi";
 
 
 /* local #defines */
+	/* define to get HW-based DTMF detection in dev->dtmf */
+	/* (note: Asterisk does its own DTMF detection, so this
+	 * is useless for Asterisk)
+	 */
+#undef HWDTMF
+	/* define to get instantaneous hook state in dev->hook */
+#undef HWHOOK
+	/* define to print debugging messages related to seq#->buf mapping */
+#undef DEBUGSEQMAP
 
 /* initialization macro; assumes target 's' is a char array memset to 0 */
 #define safeprintf(s, args...)	snprintf (s, sizeof(s) - 1, ## args)
@@ -112,6 +121,9 @@ static int alawoverride	= 0;			/* use a-law instead of mu-law*/
 static int reversepolarity = 0;			/* use reversed polarity */
 static int loopcurrent = 20;			/* loop current */
 static int lowpower = 0;			/* set on-hook voltage to 24V */
+#ifdef DEBUGSEQMAP
+static int complaintimes = 0;			/* how many times to complain */
+#endif	/* DEBUGSEQMAP */
 
 module_param(debuglevel, int, S_IWUSR|S_IRUGO);
 module_param(retoncnvfail, bool, S_IWUSR|S_IRUGO);
@@ -125,7 +137,9 @@ module_param(alawoverride, int, S_IWUSR|S_IRUGO);
 module_param(reversepolarity, int, S_IWUSR|S_IRUGO);
 module_param(loopcurrent, int, S_IWUSR|S_IRUGO);
 module_param(lowpower, int, S_IWUSR|S_IRUGO);
-
+#ifdef DEBUGSEQMAP
+module_param(complaintimes, int, S_IWUSR|S_IRUGO);
+#endif	/* DEBUGSEQMAP */
 
 /* our device structure */
 
@@ -162,9 +176,8 @@ struct oufxs_dahdi {
     struct isocbuf		in_bufs[OUFXS_MAXURB];
     int				in_submit;	/* next in buffer to submit */
     spinlock_t			in_buflock;	/* short-term lock for above */
-    char			*prevrchunk;	/* previous read chunk */
-
-    // HEREHERE: implement structure for echo canceler
+    char			*prevrchunk;	/* previous read chunk	*/
+    __u8			*seq2chunk[256];/* seqno->sample map	*/
 
     /* sequence numbers */
     __u8			outseqno;	/* out sequence number	*/
@@ -188,7 +201,9 @@ struct oufxs_dahdi {
 
     /* board state */
     int				state;	/* device state - see oufxs.h	*/
+#ifdef HWHOOK	/* superseded by hook debouncing code */
     __u8			hook;	/* 0=on-hook, 1=off-hook	*/
+#endif
     __u8			dtmf;	/* 0=no dtmf, non-0=dtmf event	*/
 
     /* locks and references */
@@ -199,14 +214,10 @@ struct oufxs_dahdi {
     // spinlock_t		lock;	/* generic per-card lock	*/
 
     /* stuff replicated from wctdm.c */
-#if 0	/* no debouncing (yet) */
     int oldrxhook;
     int debouncehook;
-#endif
     int lastrxhook;
-#if 0	/* not debouncing (yet) */
     int debounce;
-#endif
     int ohttimer;		/* remaining time for on-hook transfer in ms */
     int idletxhookstate;	/* default idle value for DR 64 */
     int lasttxhook;		/* last setting of DR 64 */
@@ -281,9 +292,11 @@ static spinlock_t boardslock;	/* lock while manipulating boards 	*/
 
 /* tables etc. */
 
+#ifdef HWDTMF
 static char slic_dtmf_table[] = {
   'D', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '*', '#', 'A', 'B', 'C'
 };
+#endif
 
 
 /* table of devices that this driver handles */
@@ -819,6 +832,18 @@ static inline int oufxs_isoc_out_submit (struct oufxs_dahdi *dev, int memflag)
 
     for (p = (union oufxs_data *) ourbuf->buf;
       p < ((union oufxs_data *) ourbuf->buf) + wpacksperurb; p++) {
+#ifdef DEBUGSEQMAP	/* make sure to remove in production */
+	if (dev->seq2chunk [dev->outseqno] != p->outpack.sample) {
+	    if (complaintimes) {
+	        complaintimes--;
+	        OUFXS_ERR (
+		  "SERIOUS: seqno %d maps to %lx, found in %lx",
+		  dev->outseqno,
+		  (long unsigned int) dev->seq2chunk[dev->outseqno],
+		  (long unsigned int) p->outpack.sample);
+	    }
+	}
+#endif
         p->outpack.outseq = dev->outseqno++;
 	dev->chans[0]->writechunk = p->outpack.sample;
 	dahdi_transmit (&dev->span);
@@ -827,7 +852,7 @@ static inline int oufxs_isoc_out_submit (struct oufxs_dahdi *dev, int memflag)
 	p->outpack.drsval = drsval;
     }
 
-    /* set the urb device (TODO: check if this needed every time) */
+    /* set the urb device (TODO: check if this is needed every time) */
     ourbuf->urb->dev = dev->udev;
     /* check if disconnect() has been called */
     if (!dev->udev) {
@@ -1016,6 +1041,7 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
     struct urb *oururb;
     unsigned long flags; /* irqsave */
     union oufxs_data *p;
+    __u8 hook;
     int i;
     int ret;
 
@@ -1045,8 +1071,16 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
 	    /* use p as a handy packet pointer */
 	    p = ((union oufxs_data *)ourbuf->buf) + i;
 
-	    /* pass new sample to dahdi */
+	    /* prepare to pass new sample to dahdi */
 	    dev->chans[0]->readchunk = p->in_pack.sample;
+
+	    /* pass sample to echo canceller, matching it to the respective
+	     * transmitted sample based on the mirrored sequence #
+	     */
+	    dahdi_ec_chunk (dev->chans[0], dev->chans[0]->readchunk,
+	      dev->seq2chunk[p->in_pack.moutsn]);
+
+	    /* perform the actual receive in dahdi */
 	    dahdi_receive (&dev->span);
 	    dev->prevrchunk = p->in_pack.sample;
 
@@ -1054,22 +1088,44 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
 	    if (p->in_pack.oddevn == 0xdd) {	/* odd packet */
 	        __u8 hkdtmf = p->inopack.hkdtmf;
 		/* hook state is hkdtmf bit 7 */
-		dev->hook = hkdtmf & 0x80;
-		// TODO: check if debouncing is needed
-		if (unlikely (dev->hook != dev->lastrxhook)) {
-		    dev->lastrxhook = dev->hook;
-		    if (dev->hook) {
-			OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
-			  "oufxsd%d going off-hook", dev->slot + 1);
-		        dahdi_hooksig (dev->chans[0], DAHDI_RXSIG_OFFHOOK);
-		    }
-		    else {
-		        dahdi_hooksig (dev->chans[0], DAHDI_RXSIG_ONHOOK);
-			OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
-			  "oufxsd%d going on-hook", dev->slot + 1);
-		    }
-		    // TODO: check missing mirrored sequences, incr. out_missed
+		hook = hkdtmf & 0x80;
+
+		if (unlikely (hook != dev->lastrxhook)) {
+		    /* hook states are different: start the debouncer */
+		    dev->debounce = 32;		/* time in milliseconds */
 		}
+		else {
+		    /* check if we are already debouncing a hook state change */
+		    if (unlikely (dev->debounce > 0)) {
+			dev->debounce--;	/* we are invoked once per ms */
+			if (dev->debounce == 0) {	/* counted down to 0? */
+			    dev->debouncehook = hook;
+			}
+		    }
+		    /* if (debounced) hook state has changed, signal upstream */
+		    if (unlikely (dev->oldrxhook != dev->debouncehook)) {
+			if (dev->debouncehook) {
+			    OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
+			      "oufxsd%d going off-hook", dev->slot + 1);
+			    dahdi_hooksig (dev->chans[0], DAHDI_RXSIG_OFFHOOK);
+			}
+			else {
+			    dahdi_hooksig (dev->chans[0], DAHDI_RXSIG_ONHOOK);
+			    OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
+			      "oufxsd%d going on-hook", dev->slot + 1);
+			}
+			dev->oldrxhook = dev->debouncehook;
+		    }
+		}
+		dev->lastrxhook = hook;
+#ifdef HWHOOK
+		dev->hook = hook;
+#endif
+
+		// TODO: check missing mirrored sequences, incr. out_missed
+
+#ifdef HWDTMF	/* hardware DTMF detection is not used in Asterisk */
+
 		/* dtmf status is bit 4 and digit is in bits 3, 2, 1 and 0 */
 		hkdtmf &= 0x1f;
 		/* implement a simple one-digit "latch" to hold dtmf value */
@@ -1081,6 +1137,8 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
 		else {			/* reset if nothing is being pressed */
 		    dev->dtmf = 0;
 		}
+#endif	/* HWDTMF */
+
 		// TODO: check if we missed an input packet, update stats if so
 	    }
 	    else {			/* even packet */
@@ -1098,13 +1156,6 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
 	    // TODO: update statistics
 	}
     }
-    /* commented out - was:
-    for (p = (union oufxs_data *) ourbuf->buf;
-      p < ((union oufxs_data *) ourbuf->buf) + rpacksperurb; p++) {
-	dev->chans[0]->readchunk = p->in_pack.sample;
-	dahdi_receive (&dev->span);
-    }
-    */
 
     /* mark this buffer as free again */
     ourbuf->state = st_free;
@@ -1237,8 +1288,12 @@ static void oufxs_setup (void *data)
     }
     dev->state = OUFXS_STATE_INIT;
     dev->lastrxhook = 0;
+#ifdef HWHOOK
     dev->hook = 0;
+#endif
+#ifdef HWDTMF
     dev->dtmf = 0;
+#endif
     spin_unlock_irqrestore (&dev->statelck, flags);
 
 init_restart:
@@ -1345,7 +1400,7 @@ init_restart:
     /* initialization step #4: setup dc-dc converter parameters */
     at_init_stage (dev, setup_dcconv);
 
-    dr_write_check (sts, 0x08, 0, drval, init_restart); /* exit dig. loopback */
+    dr_write_check (sts, 8, 0x00, drval, init_restart); /* exit dig. loopback */
     dr_write_check (sts, 108, 0xeb, drval, init_restart); /* rev.E features */
     dr_write (sts, 66, 0x01, drval, init_restart); /* Vov=low, Vbat~Vring */
     /* following six parameter values taken from SiLabs Excel formula sheet
@@ -1373,7 +1428,7 @@ init_restart:
 	  dev->slot + 1, drval);
 	msleep (8);	/* wait ~100ms 10x(8 here + 2 in dr_read()) */
 	/* a short note containing wisdom (that was painfully gained):
-	 * the sensed voltage is at the rate of the fsync pulse, and the
+	 * the voltage is sensed at the rate of the fsync pulse, and the
 	 * converter circuitry uses the sensed value to update the dcdrv
 	 * output of the chip; so, if for some reason, fsync does not
 	 * pulse at the expected rate (32kHz), convergence can be much,
@@ -1392,6 +1447,9 @@ init_restart:
 	    OUFXS_DEBUG (OUFXS_DBGTERSE,
 	      "%s: oufxs%d: early exit on dc-dc converter failure (cnv=ON)",
 	      __func__, dev->slot + 1);
+	    spin_lock_irqsave (&dev->statelck, flags);
+	    dev->state = OUFXS_STATE_ERROR;
+	    spin_unlock_irqrestore (&dev->statelck, flags);
 	    return;
 	}
 	OUFXS_ERR (
@@ -1482,6 +1540,9 @@ init_dcdc_ok:
 	    OUFXS_DEBUG (OUFXS_DBGTERSE,
 	      "%s: oufxs%d: early exit on ADC calibration failure (cnv=ON)",
 	      __func__, dev->slot);
+	    spin_lock_irqsave (&dev->statelck, flags);
+	    dev->state = OUFXS_STATE_ERROR;
+	    spin_unlock_irqrestore (&dev->statelck, flags);
 	    return;
 	}
 	else {
@@ -1544,6 +1605,9 @@ init_q56cal_error:
 	    OUFXS_DEBUG (OUFXS_DBGTERSE,
 	      "%s: oufxs%d: early exit on Q5/Q6 calibration failure (cnv=ON)",
 	      __func__, dev->slot);
+	    spin_lock_irqsave (&dev->statelck, flags);
+	    dev->state = OUFXS_STATE_ERROR;
+	    spin_unlock_irqrestore (&dev->statelck, flags);
 	    return;
 	}
 	else {
@@ -1678,6 +1742,13 @@ init_q56cal_ok:
 
     /* that's it, we 're done! */
     at_init_stage (dev, initializeok);
+
+
+#if 0
+    // DELETEME
+    OUFXS_INFO ("%s: setting ALM1 loopback", __func__);
+    dr_write_check (sts, 8, 0x00, drval, init_restart); /* exit dig. loopback */
+#endif
 
     /* mark our state as OK, so others can open and use the device */
     spin_lock_irqsave (&dev->statelck, flags);
@@ -1988,9 +2059,14 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	break;
 
       case OUFXS_IOCGHOOK:
+#ifdef HWHOOK
         retval = __put_user (dev->hook? 1:0, (int __user *) data);
+#else
+        retval = __put_user (dev->oldrxhook? 1:0, (int __user *) data);
+#endif
 	break;
 
+#ifdef HWDTMF
       case OUFXS_IOCGDTMF:
         if (dev->dtmf && (dev->dtmf != 0xff)) {
 	    retval = __put_user (
@@ -2002,6 +2078,7 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	    retval = __put_user (0, (int __user *) data);
 	}
 	break;
+#endif
 
       default:
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: %d", __func__, cmd);
@@ -2027,13 +2104,14 @@ static int oufxs_probe (struct usb_interface *intf,
     struct oufxs_dahdi *dev;
     struct usb_host_interface *intf_desc;
     struct usb_endpoint_descriptor *epd;
-    size_t pcktsize;
+    size_t usbpcksize;
     char wqname[40];
     struct urb *urb;
     int retval = -ENODEV;
     int slot;
     int i, j;
     unsigned int flags;
+    union oufxs_data *p;
     __u8 *pcm_silence;
 
     /* lock boards and search for an empty slot */
@@ -2103,47 +2181,47 @@ static int oufxs_probe (struct usb_interface *intf,
 
 	/* if we don't have yet a bulk IN EP and found one, mark it as ours */
 	if (!dev->ep_bulk_in && usb_endpoint_is_bulk_in (epd)) {
-	    pcktsize = le16_to_cpu (epd->wMaxPacketSize);
+	    usbpcksize = le16_to_cpu (epd->wMaxPacketSize);
 	    dev->ep_bulk_in = epd->bEndpointAddress;
-	    dev->bulk_in_size = pcktsize;
+	    dev->bulk_in_size = usbpcksize;
 	    OUFXS_DEBUG (OUFXS_DBGVERBOSE,
 	      "bulk IN  endpoint found, EP#%d, size:%d",
 	      dev->ep_bulk_in, dev->bulk_in_size);
 	}
 	/* same for a bulk OUT EP */
 	else if (!dev->ep_bulk_out && usb_endpoint_is_bulk_out (epd)) {
-	    pcktsize = le16_to_cpu (epd->wMaxPacketSize);
+	    usbpcksize = le16_to_cpu (epd->wMaxPacketSize);
 	    dev->ep_bulk_out = epd->bEndpointAddress;
-	    dev->bulk_out_size = pcktsize;
+	    dev->bulk_out_size = usbpcksize;
 	    OUFXS_DEBUG (OUFXS_DBGVERBOSE,
 	      "bulk OUT endpont found, EP#%d, size:%d",
 	      dev->ep_bulk_out, dev->bulk_out_size);
 	}
 	/* same for an isochronous IN EP */
 	else if (!dev->ep_isoc_in && usb_endpoint_is_isoc_in (epd)) {
-	    pcktsize = le16_to_cpu (epd->wMaxPacketSize);
-	    if (pcktsize != sizeof (union oufxs_data)) {
+	    usbpcksize = le16_to_cpu (epd->wMaxPacketSize);
+	    if (usbpcksize != sizeof (union oufxs_data)) {
 	        OUFXS_ERR ("unexpected max packet size %d in isoc-in ep",
-		  pcktsize);
+		  usbpcksize);
 		goto probe_error;
 	    }
 	    dev->ep_isoc_in = epd->bEndpointAddress;
 	    OUFXS_DEBUG (OUFXS_DBGVERBOSE,
 	      "isoc IN  endpoint found, EP#%d, size:%d",
-	      dev->ep_isoc_in, pcktsize);
+	      dev->ep_isoc_in, usbpcksize);
 	}
 	/* same for an isochronous OUT EP */
 	else if (!dev->ep_isoc_out && usb_endpoint_is_isoc_out (epd)) {
-	    pcktsize = le16_to_cpu (epd->wMaxPacketSize);
-	    if (pcktsize != sizeof (union oufxs_data)) {
+	    usbpcksize = le16_to_cpu (epd->wMaxPacketSize);
+	    if (usbpcksize != sizeof (union oufxs_data)) {
 	        OUFXS_ERR ("unexpected max packet size %d in isoc-out ep",
-		  pcktsize);
+		  usbpcksize);
 		goto probe_error;
 	    }
 	    dev->ep_isoc_out = epd->bEndpointAddress;
 	    OUFXS_DEBUG (OUFXS_DBGVERBOSE,
 	      "isoc IN  endpoint found, EP#%d, size:%d",
-	      dev->ep_isoc_out, pcktsize);
+	      dev->ep_isoc_out, usbpcksize);
 	}
 	/* complain (but don't fail) on other, unknown EPs */
 	else {
@@ -2263,6 +2341,22 @@ static int oufxs_probe (struct usb_interface *intf,
 	    urb->iso_frame_desc[j].length = OUFXS_DPACK_SIZE;
 	}
     }
+
+    for (i = j = 0, p = (union oufxs_data *)(&dev->outbufs[0])->buf;
+      j <= 255; j++) {
+	dev->seq2chunk [j] = p->outpack.sample;
+	if ((++p - (union oufxs_data *)(&dev->outbufs[i])->buf)
+	  == wpacksperurb) {
+	    i = (i + 1) % OUFXS_MAXURB;
+	    p = (union oufxs_data *)(&dev->outbufs[i])->buf;
+	}
+    }
+
+    /* prepare a packet of "silence" to return to dahdi for as long as
+     * we have not yet received data from the board (use the last
+     * packet of the last IN urb to be submitted as a scratch area for
+     * storing the actual sample)
+     */
 
     pcm_silence = 
       ((union oufxs_data *) (&dev->in_bufs[OUFXS_MAXURB - 1].
@@ -2401,10 +2495,12 @@ static void oufxs_disconnect (struct usb_interface *intf)
 static int __init oufxs_init(void)
 {
     int retval;
+    int pwrof2;
 
     OUFXS_INFO ("oufxs driver v%s loading\n", driverversion);
     OUFXS_DEBUG (OUFXS_DBGTERSE, "debug level is %d", debuglevel);
 
+    /* adjust the loop current */
     if (loopcurrent < 20 || loopcurrent > 41) {
         OUFXS_WARN ("loopcurrent=%d is out of range, resetting to 20mA",
 	  loopcurrent);
@@ -2412,6 +2508,66 @@ static int __init oufxs_init(void)
     }
     else if (loopcurrent != 20) {	/* be quiet on default value */
         OUFXS_INFO ("loopcurrent set to %d mA", loopcurrent);
+    }
+
+    /* adjust {r,w}packsperurb to be powers of 2 */
+    for (pwrof2 = 2; pwrof2 <= OUFXS_MAXPCKPERURB; pwrof2 <<= 1) {
+	if (rpacksperurb > pwrof2) {
+	    if (pwrof2 == OUFXS_MAXPCKPERURB) {
+	        OUFXS_WARN ("rpacksperurb out of range, setting it to %d",
+		  OUFXS_MAXPCKPERURB);
+		rpacksperurb = OUFXS_MAXPCKPERURB;
+		break;
+	    }
+	    continue;
+	}
+	if (rpacksperurb < pwrof2) {
+	    OUFXS_INFO ("rpacksperurb adjusted to %d", pwrof2);
+	    rpacksperurb = pwrof2;
+	}
+	/* the following break will also apply if rpacksperurb == pwrof2,
+	 * only in that case we accept silently the user-supplied value
+	 */
+	break;
+    }
+    for (pwrof2 = 2; pwrof2 <= OUFXS_MAXPCKPERURB; pwrof2 <<= 1) {
+	if (wpacksperurb > pwrof2) {
+	    if (pwrof2 == OUFXS_MAXPCKPERURB) {
+	        OUFXS_WARN ("wpacksperurb out of range, setting it to %d",
+		  OUFXS_MAXPCKPERURB);
+		wpacksperurb = OUFXS_MAXPCKPERURB;
+		break;
+	    }
+	    continue;
+	}
+	if (wpacksperurb < pwrof2) {
+	    OUFXS_INFO ("wpacksperurb adjusted to %d", pwrof2);
+	    wpacksperurb = pwrof2;
+	}
+	/* the following break will also apply if wpacksperurb == pwrof2,
+	 * only in that case we accept silently the user-supplied value
+	 */
+	break;
+    }
+
+    /* check/adjust the values of {r,w}urbsinflight */
+    if (rurbsinflight < 2) {
+        OUFXS_WARN ("rurbsinflight out of range (too low), setting it to 2");
+	rurbsinflight = 2;
+    }
+    else if (rurbsinflight > OUFXS_MAXINFLIGHT) {
+        OUFXS_WARN ("rurbsinflight out of range (too high), setting it to %d",
+	  OUFXS_MAXINFLIGHT);
+	rurbsinflight = OUFXS_MAXINFLIGHT;
+    }
+    if (wurbsinflight < 2) {
+        OUFXS_WARN ("wurbsinflight out of range (too low), setting it to 2");
+	wurbsinflight = 2;
+    }
+    else if (wurbsinflight > OUFXS_MAXINFLIGHT) {
+        OUFXS_WARN ("wurbsinflight out of range (too high), setting it to %d",
+	  OUFXS_MAXINFLIGHT);
+	wurbsinflight = OUFXS_MAXINFLIGHT;
     }
 
     spin_lock_init (&boardslock);
