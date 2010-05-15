@@ -30,7 +30,7 @@
 #define OUFXS_DBGDEBUGGING	3 /* may clog console/syslog, use at own risk */
 #define OUFXS_FACILITY		KERN_INFO
 
-#define	DEBUGGING	/* turns on verbose debugging: undefine in production */
+#define	DEBUGGING	/* turns on verbose debugging: undef in production */
 
 /* various states a board may be in	*/
 #define OUFXS_STATE_IDLE	0	/* not initialized		*/
@@ -55,10 +55,14 @@
 /* max # of boards supported per system */
 #define OUFXS_MAX_BOARDS	128
 
-#define OUFXS_MAXURB		16	/* maximum number of isoc URBs */
+#define OUFXS_MAXURB		 8	/* maximum number of isoc URBs */
 #define OUFXS_INFLIGHT	 	 4	/* number of isoc URBs in flight */
-#define OUFXS_MAXINFLIGHT	 8	/* max isoc URBs in flight */
+#define OUFXS_MAXINFLIGHT	 4	/* max isoc URBs in flight */
 #define OUFXS_MAXPCKPERURB	32	/* max number of packets per isoc URB */
+
+#if (OUFXS_MAXURB * OUFXS_MAXPCKPERURB > 256)
+#error "The product of OUFXS_MAXURB and OUFXS_MAXPCKPERURB must be <= 256"
+#endif
 
 
 /* debug macros for userland and kernel */
