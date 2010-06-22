@@ -55,10 +55,17 @@
 /* max # of boards supported per system */
 #define OUFXS_MAX_BOARDS	128
 
+#if 0
 #define OUFXS_MAXURB		 8	/* maximum number of isoc URBs */
 #define OUFXS_INFLIGHT	 	 4	/* number of isoc URBs in flight */
 #define OUFXS_MAXINFLIGHT	 4	/* max isoc URBs in flight */
 #define OUFXS_MAXPCKPERURB	32	/* max number of packets per isoc URB */
+#else
+#define OUFXS_MAXURB		16	/* maximum number of isoc URBs */
+#define OUFXS_INFLIGHT	 	16	/* number of isoc URBs in flight */
+#define OUFXS_MAXINFLIGHT	16	/* max isoc URBs in flight */
+#define OUFXS_MAXPCKPERURB	16	/* max number of packets per isoc URB */
+#endif
 
 #if (OUFXS_MAXURB * OUFXS_MAXPCKPERURB > 256)
 #error "The product of OUFXS_MAXURB and OUFXS_MAXPCKPERURB must be <= 256"

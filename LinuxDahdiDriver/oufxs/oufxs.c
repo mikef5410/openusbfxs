@@ -446,6 +446,56 @@ static int start_stop_iov2 (struct oufxs_dahdi *dev, __u8 val)
     return 0;
 }
 
+/* write serial number to the board's eeprom */
+static int burn_serial (struct oufxs_dahdi *dev, unsigned long serial)
+{
+    union oufxs_packet req = WRITE_SERIAL_NO_REQ(
+      (serial & 0xff000000) >> 24,
+      (serial & 0x00ff0000) >> 16,
+      (serial & 0x0000ff00) >>  8,
+      (serial & 0x000000ff));
+    union oufxs_packet rpl;
+    int rlngth;
+    int length;
+    int retval;
+
+    int outpipe = usb_sndbulkpipe (dev->udev, dev->ep_bulk_out);
+    int in_pipe = usb_rcvbulkpipe (dev->udev, dev->ep_bulk_in);
+
+    rlngth = sizeof(req.serial_req);
+    retval = usb_bulk_msg (dev->udev, outpipe, &req, rlngth, &length, 1000);
+    if (retval) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(out) returned %d", __func__, retval);
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+        return -EIO;
+    }
+
+    rlngth = sizeof(rpl.serial_rpl);
+    retval = usb_bulk_msg (dev->udev, in_pipe, &rpl, rlngth, &length, 1000);
+    if (retval) {
+	/* avoid issuing warnings on ETIMEDOUT; if board doesn't respond,
+	 * we 'll get to fill out message rings, syslog files, etc. without
+	 * any reason
+	 */
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(in) returned %d", __func__, retval);
+        return -EIO;
+    }
+    if (length != rlngth) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(in) read %d instead of %d bytes", __func__,
+	  length, rlngth);
+        return -EIO;
+    }
+    return 0;
+}
+
 /* ProSLIC register I/O implementations */
 
  /* read_direct read a ProSLIC DR
@@ -819,7 +869,7 @@ static inline int oufxs_isoc_out_submit (struct oufxs_dahdi *dev, int memflag)
     /* refuse to re-submit if inconsistent (should *never* happen) */
     if (ourbuf->state != st_free) {
 	if (!ourbuf->inconsistent) {
-	    OUFXS_ERR ("%s: oufxs%d: inconsistent state on outbuf %d; aborting",
+	    OUFXS_ERR("%s: oufxs%d: inconsistent state on outbuf %ld; aborting",
 	      __func__, dev->slot + 1, (ourbuf - &dev->outbufs[0]));
 	}
 	ourbuf->inconsistent++;	/* only print message once per outbuf */
@@ -911,7 +961,7 @@ static inline int oufxs_isoc_in__submit (struct oufxs_dahdi *dev, int memflag)
     /* refuse to re-submit if inconsistent (should *never* happen) */
     if (ourbuf->state != st_free) {
         if (!ourbuf->inconsistent) {
-	    OUFXS_ERR ("%s: oufxs%d: inconsistent state on in_buf %d; aborting",
+	    OUFXS_ERR("%s: oufxs%d: inconsistent state on in_buf %ld; aborting",
 	      __func__, dev->slot + 1, (ourbuf - &dev->in_bufs[0]));
 	}
 	ourbuf->inconsistent++;
@@ -979,7 +1029,7 @@ static void oufxs_isoc_out_cbak (struct urb *urb)
     /* refuse to proceed if inconsistent (should *never* happen) */
     if (ourbuf->state != st_subm) {
 	if (!ourbuf->inconsistent) {
-	    OUFXS_ERR ("%s: oufxs%d: inconsistent state on outbuf %d; aborting",
+	    OUFXS_ERR("%s: oufxs%d: inconsistent state on outbuf %ld; aborting",
 	      __func__, dev->slot + 1, (ourbuf - &dev->outbufs[0]));
 	}
 	ourbuf->inconsistent++;	/* only print message once per outbuf */
@@ -999,7 +1049,7 @@ static void oufxs_isoc_out_cbak (struct urb *urb)
     }
 #endif
 
-    /* note that this code executes once per millisecond */
+    /* note that this code executes once per wpacksperurb milliseconds */
 
     /* if ringing, set the 'idle' mode to oht (idle mode will be
      * applied when ringing stops -- see DAHDI_TXSIG_{ON,OFF}HOOK
@@ -1007,7 +1057,7 @@ static void oufxs_isoc_out_cbak (struct urb *urb)
      */
     if (unlikely (dev->lasttxhook == 0x04)) {	/* ringing? */
 	/* arm ohttimer */
-        dev->ohttimer = OHT_TIMER;
+        dev->ohttimer = OHT_TIMER / wpacksperurb;
 	/* preset idle state linefeed mode to oht */
 	dev->idletxhookstate = (reversepolarity ^ dev->reversepolarity)?
     	  0x06 : 0x02; 			/* rev/fwd oht linefeed	*/
@@ -1053,7 +1103,7 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
     /* refuse to proceed if inconsistent (should *never* happen) */
     if (ourbuf->state != st_subm) {
         if (!ourbuf->inconsistent) {
-	    OUFXS_ERR ("%s: oufxs%d: inconsistent state on in_buf %d; aborting",
+	    OUFXS_ERR("%s: oufxs%d: inconsistent state on in_buf %ld; aborting",
 	      __func__, dev->slot + 1, (ourbuf - &dev->in_bufs[0]));
 	}
 	ourbuf->inconsistent++; /* only print message once per in_buf */
@@ -1198,7 +1248,9 @@ static void oufxs_delete (struct kref *kr)
     dahdi_unregister (&dev->span);
 
     /* destroy board initialization thread workqueue, killing worker thread */
-    destroy_workqueue (dev->iniwq);
+    if (dev->iniwq) {
+	destroy_workqueue (dev->iniwq);
+    }
     dev->iniwq = NULL;
 
     // TODO: remove/bypass urb anchoring for kernels earlier than 2.6.23
@@ -1207,13 +1259,21 @@ static void oufxs_delete (struct kref *kr)
 
     /* free static buffers and urbs */
     for (i = 0; i < OUFXS_MAXURB; i++) {
-        usb_buffer_free (dev->udev, OUFXS_MAXOBUFLEN,
-	  dev->outbufs[i].buf, dev->outbufs[i].urb->transfer_dma);
-	usb_free_urb (dev->outbufs[i].urb);
+	if (dev->outbufs[i].buf) {
+	    usb_buffer_free (dev->udev, OUFXS_MAXOBUFLEN,
+	      dev->outbufs[i].buf, dev->outbufs[i].urb->transfer_dma);
+	}
+	if (dev->outbufs[i].urb) {
+	    usb_free_urb (dev->outbufs[i].urb);
+	}
 
-        usb_buffer_free (dev->udev, OUFXS_MAXIBUFLEN,
-	  dev->in_bufs[i].buf, dev->in_bufs[i].urb->transfer_dma);
-	usb_free_urb (dev->in_bufs[i].urb);
+	if (dev->in_bufs[i].buf) {
+	    usb_buffer_free (dev->udev, OUFXS_MAXIBUFLEN,
+	      dev->in_bufs[i].buf, dev->in_bufs[i].urb->transfer_dma);
+	}
+	if (dev->in_bufs[i].urb) {
+	    usb_free_urb (dev->in_bufs[i].urb);
+	}
     }
 
     /* return usb device to the usb core (usb code will also free mem. etc.) */
@@ -1279,6 +1339,26 @@ static void oufxs_setup (void *data)
 
     /* wait for USB initialization to settle */
     ssleep (1);
+
+
+    if (!dev->udev->serial) {
+        OUFXS_WARN ("%s: oufxs%d: old-version firmware not reporting serial",
+	  __func__, dev->slot + 1);
+	OUFXS_WARN ("%s: please upgrade firmware on board and replug",
+	  __func__);
+	return;
+    }
+    else if (!strncmp (dev->udev->serial, "EEEEEEEE", 8)) {
+        OUFXS_WARN ("%s: oufxs%d: no serial on device's eeprom, burning one",
+	  __func__, dev->slot + 1);
+	// FIXME: locking
+	sts = burn_serial (dev, jiffies); /* should be random enough */
+        OUFXS_WARN ("%s: oufxs%d: serial %swritten OK, re-plug to %s",
+	  __func__, dev->slot+1,
+	  sts? "NOT":"", sts? "retry operation":"activate new serial");
+	/* will not progress anyway */
+	return;
+    }
 
     /* never proceed with normal board initialization unless in idle state */
     spin_lock_irqsave (&dev->statelck, flags);
@@ -2110,7 +2190,7 @@ static int oufxs_probe (struct usb_interface *intf,
     int retval = -ENODEV;
     int slot;
     int i, j;
-    unsigned int flags;
+    unsigned long flags;
     union oufxs_data *p;
     __u8 *pcm_silence;
 
@@ -2201,28 +2281,29 @@ static int oufxs_probe (struct usb_interface *intf,
 	else if (!dev->ep_isoc_in && usb_endpoint_is_isoc_in (epd)) {
 	    usbpcksize = le16_to_cpu (epd->wMaxPacketSize);
 	    if (usbpcksize != sizeof (union oufxs_data)) {
-	        OUFXS_ERR ("unexpected max packet size %d in isoc-in ep",
+	        OUFXS_ERR ("unexpected max packet size %ld in isoc-in ep",
 		  usbpcksize);
 		goto probe_error;
 	    }
 	    dev->ep_isoc_in = epd->bEndpointAddress;
 	    OUFXS_DEBUG (OUFXS_DBGVERBOSE,
-	      "isoc IN  endpoint found, EP#%d, size:%d",
+	      "isoc IN  endpoint found, EP#%d, size:%ld",
 	      dev->ep_isoc_in, usbpcksize);
 	}
 	/* same for an isochronous OUT EP */
 	else if (!dev->ep_isoc_out && usb_endpoint_is_isoc_out (epd)) {
 	    usbpcksize = le16_to_cpu (epd->wMaxPacketSize);
 	    if (usbpcksize != sizeof (union oufxs_data)) {
-	        OUFXS_ERR ("unexpected max packet size %d in isoc-out ep",
+	        OUFXS_ERR ("unexpected max packet size %ld in isoc-out ep",
 		  usbpcksize);
 		goto probe_error;
 	    }
 	    dev->ep_isoc_out = epd->bEndpointAddress;
 	    OUFXS_DEBUG (OUFXS_DBGVERBOSE,
-	      "isoc IN  endpoint found, EP#%d, size:%d",
+	      "isoc IN  endpoint found, EP#%d, size:%ld",
 	      dev->ep_isoc_out, usbpcksize);
 	}
+
 	/* complain (but don't fail) on other, unknown EPs */
 	else {
 	    OUFXS_ERR ("Unexpected endpoint #%d", epd->bEndpointAddress);
@@ -2231,8 +2312,8 @@ static int oufxs_probe (struct usb_interface *intf,
 
     /* at the end of the loop, make sure we have found all four required EPs */
     if (!(dev->ep_bulk_in && dev->ep_bulk_out &&
-      dev->ep_isoc_in && dev->ep_isoc_out)) {
-        OUFXS_ERR ("board does not support all required bulk/isoc EPs??");
+      dev->ep_isoc_in && dev->ep_isoc_out )) {
+        OUFXS_ERR ("board does not support all required bulk/isoc/int EPs??");
 	goto probe_error;
     }
 
@@ -2511,7 +2592,7 @@ static int __init oufxs_init(void)
     }
 
     /* adjust {r,w}packsperurb to be powers of 2 */
-    for (pwrof2 = 2; pwrof2 <= OUFXS_MAXPCKPERURB; pwrof2 <<= 1) {
+    for (pwrof2 = 1; pwrof2 <= OUFXS_MAXPCKPERURB; pwrof2 <<= 1) {
 	if (rpacksperurb > pwrof2) {
 	    if (pwrof2 == OUFXS_MAXPCKPERURB) {
 	        OUFXS_WARN ("rpacksperurb out of range, setting it to %d",
@@ -2530,7 +2611,7 @@ static int __init oufxs_init(void)
 	 */
 	break;
     }
-    for (pwrof2 = 2; pwrof2 <= OUFXS_MAXPCKPERURB; pwrof2 <<= 1) {
+    for (pwrof2 = 1; pwrof2 <= OUFXS_MAXPCKPERURB; pwrof2 <<= 1) {
 	if (wpacksperurb > pwrof2) {
 	    if (pwrof2 == OUFXS_MAXPCKPERURB) {
 	        OUFXS_WARN ("wpacksperurb out of range, setting it to %d",
