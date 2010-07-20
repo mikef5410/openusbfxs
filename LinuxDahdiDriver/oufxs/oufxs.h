@@ -128,6 +128,8 @@ struct oufxs_stats {
 #define OUFXS_IOCGDTMF	_IOR(OUFXS_IOC_MAGIC, 5, int)
 /* get and reset statistics on errors etc. */
 #define OUFXS_IOCGSTATS	_IOR(OUFXS_IOC_MAGIC, 6, struct oufxs_stats)
-#define OUFXS_MAX_IOCTL	6
+/* burn a serial number */
+#define OUFXS_IOCBURNSN	_IO(OUFXS_IOC_MAGIC, 7)
+#define OUFXS_MAX_IOCTL	7
 
 #endif /* OUFXS_H */

@@ -109,18 +109,20 @@ static char *driverversion = "0.1-dahdi";
 static int debuglevel	= DEFDEBUGLEVEL;	/* actual debug level */
 /* initialization failure handling */
 static int retoncnvfail	= RETONFAIL;		/* quit on dc-dc conv fail */
-static int retonadcfail	= RETONFAIL;		/* quit on calibration1 fail */
-static int retonq56fail	= RETONFAIL;		/* quit on q56alibration fail */
+static int retonadcfail	= RETONFAIL;		/* quit on adc calbr. fail */
+static int retonq56fail	= RETONFAIL;		/* quit on q56 calbr. fail */
 /* urb etc. dimensioning */
 static int wpacksperurb	= WPACKSPERURB;		/* # of write packets per urb */
 static int wurbsinflight= WURBSINFLIGHT;	/* # of write urbs in-flight */
 static int rpacksperurb	= RPACKSPERURB;		/* # of read packets per urb */
 static int rurbsinflight= RURBSINFLIGHT;	/* # of read urbs in-flight */
+static int sofprofile = 0;			/* SOF profiling mode */
 /* telephony-related */
 static int alawoverride	= 0;			/* use a-law instead of mu-law*/
 static int reversepolarity = 0;			/* use reversed polarity */
 static int loopcurrent = 20;			/* loop current */
 static int lowpower = 0;			/* set on-hook voltage to 24V */
+static int hifreq = 1;				/* ~80kHz, for L1=100uH */
 #ifdef DEBUGSEQMAP
 static int complaintimes = 0;			/* how many times to complain */
 #endif	/* DEBUGSEQMAP */
@@ -133,10 +135,12 @@ module_param(wpacksperurb, int, S_IRUGO);
 module_param(wurbsinflight, int, S_IRUGO);
 module_param(rpacksperurb, int, S_IRUGO);
 module_param(rurbsinflight, int, S_IRUGO);
+module_param(sofprofile, int, S_IWUSR|S_IRUGO);
 module_param(alawoverride, int, S_IWUSR|S_IRUGO);
 module_param(reversepolarity, int, S_IWUSR|S_IRUGO);
 module_param(loopcurrent, int, S_IWUSR|S_IRUGO);
 module_param(lowpower, int, S_IWUSR|S_IRUGO);
+module_param(hifreq, int, S_IWUSR|S_IRUGO);
 #ifdef DEBUGSEQMAP
 module_param(complaintimes, int, S_IWUSR|S_IRUGO);
 #endif	/* DEBUGSEQMAP */
@@ -322,6 +326,7 @@ static struct usb_driver oufxs_driver = {
 static int start_stop_iov2 (struct oufxs_dahdi *, __u8);
 static int read_direct (struct oufxs_dahdi *, __u8, __u8 *);
 static int write_direct (struct oufxs_dahdi *, __u8, __u8, __u8 *);
+static int sof_profile (struct oufxs_dahdi *);
 
 /* macros and functions for manipulating and printing Si3210 register values */
 
@@ -449,11 +454,11 @@ static int start_stop_iov2 (struct oufxs_dahdi *dev, __u8 val)
 /* write serial number to the board's eeprom */
 static int burn_serial (struct oufxs_dahdi *dev, unsigned long serial)
 {
-    union oufxs_packet req = WRITE_SERIAL_NO_REQ(
-      (serial & 0xff000000) >> 24,
-      (serial & 0x00ff0000) >> 16,
-      (serial & 0x0000ff00) >>  8,
-      (serial & 0x000000ff));
+    __u8 b3 = (serial & 0xff000000) >> 24;
+    __u8 b2 = (serial & 0x00ff0000) >> 16;
+    __u8 b1 = (serial & 0x0000ff00) >>  8;
+    __u8 b0 = (serial & 0x000000ff);
+    union oufxs_packet req = WRITE_SERIAL_NO_REQ (b3, b2, b1, b0);
     union oufxs_packet rpl;
     int rlngth;
     int length;
@@ -493,6 +498,12 @@ static int burn_serial (struct oufxs_dahdi *dev, unsigned long serial)
 	  length, rlngth);
         return -EIO;
     }
+
+    OUFXS_DEBUG (OUFXS_DBGTERSE,
+      "%s: burnt serial %02X%02X%02X%02X (got back %02X%02X%02X%02X)",
+      __func__, b3, b2, b1, b0, rpl.serial_rpl.str[0], rpl.serial_rpl.str[1],
+      rpl.serial_rpl.str[2], rpl.serial_rpl.str[3]);
+
     return 0;
 }
 
@@ -763,6 +774,106 @@ static int is_valid_indirect_register (const __u8 b)
     if (b >= 99 && b <= 104) return true;
     return false;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+static int sof_profile (struct oufxs_dahdi *dev)
+{
+    int i;
+    union oufxs_packet req = SOFPROFILE_REQ();
+    union oufxs_packet rpl;
+    int rlngth;
+    int length;
+    int retval;
+    char *printbuf;
+
+    int outpipe = usb_sndbulkpipe (dev->udev, dev->ep_bulk_out);
+    int in_pipe = usb_rcvbulkpipe (dev->udev, dev->ep_bulk_in);
+
+    printbuf = (char *) kzalloc (256, GFP_KERNEL);
+    if (!printbuf) {
+	OUFXS_ERR ("%s: out of memory", __func__);
+        return -ENOMEM;
+    }
+
+    rlngth = sizeof(req.sofprof_req);
+
+    /* ??? locking? */
+    retval = usb_bulk_msg (dev->udev, outpipe, &req, rlngth, &length, 1000);
+    if (retval) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(out) returned %d", __func__, retval);
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+        return -EIO;
+    }
+    if (length != rlngth) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(out) wrote %d instead of %d bytes", __func__,
+	  length, rlngth);
+        return -EIO;
+    }
+
+    rlngth = sizeof (rpl.sofprof_rpl);
+    retval = usb_bulk_msg (dev->udev, in_pipe, &rpl, rlngth, &length, 1000);
+    if (retval) {
+	/* avoid issuing warnings on ETIMEDOUT */
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(in) returned %d", __func__, retval);
+        return -EIO;
+    }
+    if (length != rlngth) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(in) read %d instead of %d bytes", __func__,
+	  length, rlngth);
+        return -EIO;
+    }
+
+    OUFXS_INFO (
+     " 01 | 02 | 03 | 04 | 05 | 06 | 07 | 08 | 09 | 10 | 11 | 12 | 13 | 14 | 15"
+     );
+    for (i = 1; i < 15; i++) {
+        snprintf (&printbuf[5 * (i - 1)], 6, (i == 14)? "%04X ":"%04X|",
+	  (__u16) (SOFPROFILE_TMRVAL(rpl.sofprof_rpl, i) -
+	  SOFPROFILE_TMRVAL(rpl.sofprof_rpl, i - 1)));
+    }
+    OUFXS_INFO ("%s", printbuf);
+
+    kfree (printbuf);
+    return 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 static void dump_direct_regs (struct oufxs_dahdi *dev, char *msg)
@@ -1156,13 +1267,13 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
 		    if (unlikely (dev->oldrxhook != dev->debouncehook)) {
 			if (dev->debouncehook) {
 			    OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
-			      "oufxsd%d going off-hook", dev->slot + 1);
+			      "oufxs%d going off-hook", dev->slot + 1);
 			    dahdi_hooksig (dev->chans[0], DAHDI_RXSIG_OFFHOOK);
 			}
 			else {
 			    dahdi_hooksig (dev->chans[0], DAHDI_RXSIG_ONHOOK);
 			    OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
-			      "oufxsd%d going on-hook", dev->slot + 1);
+			      "oufxs%d going on-hook", dev->slot + 1);
 			}
 			dev->oldrxhook = dev->debouncehook;
 		    }
@@ -1232,7 +1343,7 @@ static void oufxs_delete (struct kref *kr)
     int i;
     unsigned long flags;	/* irqsave flags */
 
-    OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "delete()");
+    OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s(): starting", __func__);
 
     /* set state to UNLOAD, so others will see it */
     spin_lock_irqsave (&dev->statelck, flags);
@@ -1296,6 +1407,7 @@ static void oufxs_delete (struct kref *kr)
 
     kfree (dev);
 
+    OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: finished", __func__);
 }
 
 static void inline at_init_stage (struct oufxs_dahdi *dev, enum init_stage x)
@@ -1341,6 +1453,7 @@ static void oufxs_setup (void *data)
     ssleep (1);
 
 
+    /* handle serial numbers, burn one if required */
     if (!dev->udev->serial) {
         OUFXS_WARN ("%s: oufxs%d: old-version firmware not reporting serial",
 	  __func__, dev->slot + 1);
@@ -1359,6 +1472,10 @@ static void oufxs_setup (void *data)
 	/* will not progress anyway */
 	return;
     }
+    else {
+        OUFXS_INFO ("%s: oufxs%d: serial number is %s", __func__, dev->slot + 1,
+	  dev->udev->serial);
+    }
 
     /* never proceed with normal board initialization unless in idle state */
     spin_lock_irqsave (&dev->statelck, flags);
@@ -1366,6 +1483,8 @@ static void oufxs_setup (void *data)
         spin_unlock_irqrestore (&dev->statelck, flags);
 	return;
     }
+
+    /* flag we are starting with initialization */
     dev->state = OUFXS_STATE_INIT;
     dev->lastrxhook = 0;
 #ifdef HWHOOK
@@ -1401,6 +1520,26 @@ init_restart:
 	  dev->slot + 1);
     }
     timeouts = 0;
+
+    /* now we know board responds, handle the special case of SOF profiling */
+    if (sofprofile > 0) {
+        OUFXS_INFO ("%s: in (early) SOF profiling mode", __func__);
+	for (i = 0; i < sofprofile; i++) {
+	    sts = sof_profile (dev);
+	    if (sts < 0) {
+	        OUFXS_ERR ("%s: sof_profile() returned %d - profiling halted",
+		  __func__, sts);
+		break;
+	    }
+	}
+	OUFXS_INFO ("%s: will not do further initializations in profile mode",
+	  __func__);
+	OUFXS_INFO ("%s: to initialize, set sofprofile to 0 and re-plug",
+	  __func__);
+	return;
+    }
+
+
 
     /* advice to passers-by: initialization procedure follows closely
      * the guidelines of Silabs application note 35 (AN35.pdf); the
@@ -1486,8 +1625,14 @@ init_restart:
     /* following six parameter values taken from SiLabs Excel formula sheet
      * (with a fixed inductor value of 100uH, NREN=1, dist=1000)
      */
-    dr_write_check (sts, 92, 202, drval, init_restart); /* PWM period=12.33us */
-    dr_write_check (sts, 93, 12, drval, init_restart); /* min off time=732ns */
+    if (hifreq) {
+        dr_write_check (sts, 92, 202, drval, init_restart); /* period=12.33us */
+	dr_write_check (sts, 93, 0x0c, drval, init_restart);/* min off t=732ns*/
+    }
+    else {
+	dr_write_check (sts, 92, 230, drval, init_restart); /* period=FIXME */
+	dr_write_check (sts, 93, 0x19, drval, init_restart);/* min off t=FIXME*/
+    }
     dr_write_check (sts, 74, 44, drval, init_restart); /* Vbat(high)=-66V */
     dr_write_check (sts, 75, 40, drval, init_restart); /* Vbat(low)=-60V */
     dr_write_check (sts, 71, 0, drval, init_restart); /* Cur. max=20mA (dflt) */
@@ -1730,7 +1875,20 @@ init_q56cal_ok:
 	msleep (200);
     }
     OUFXS_DEBUG (OUFXS_DBGTERSE,
-      "%s: oufxs%d: longitudinal mode calibration OK", __func__, dev->slot + 1);
+      "%s: oufxs%d: longitu-dinal mode calibration OK", __func__, dev->slot + 1);
+
+    OUFXS_DEBUG (OUFXS_DBGTERSE,
+      "%s: oufxs%d: starting dc/dc calibration", __func__, dev->slot + 1);
+    dr_write (sts, 93, hifreq? 0x8c:0x99, drval, init_restart);  /* calibrate */
+    dr_read  (sts, 107, drval, init_restart);           /* check cal rslt */
+    if (drval < 2 || drval > 13) {
+        OUFXS_WARN (
+          "%s: oufxs%d: dc/dc calibration yields dr107=%d!",
+          __func__, dev->slot + 1, drval);
+        dr_write (sts, 107, 0x08, drval, init_restart); /* write avg value */
+    }
+    OUFXS_DEBUG (OUFXS_DBGTERSE,
+      "%s: oufxs%d: dc/dc calibration finished", __func__, dev->slot + 1);
 
 
     /* initialization step #10: perform final miscellaneous initializations */
@@ -1820,6 +1978,7 @@ init_q56cal_ok:
     dump_direct_regs (dev, "finally...");
     dump_indirect_regs (dev, "..finished");
 
+
     /* that's it, we 're done! */
     at_init_stage (dev, initializeok);
 
@@ -1851,6 +2010,23 @@ init_q56cal_ok:
 	    OUFXS_ERR ("%s: isoc_submit(in) failed with %d", __func__, __ret);
 	    // TODO: cancel possibly succeeded URBs and goto init_restart
 	}
+    }
+
+    /* now we have initialized board, handle special case of SOF profiling */
+    if (sofprofile < 0) {
+        OUFXS_INFO ("%s: in (late) SOF profiling mode", __func__);
+	for (i = 0; i < -sofprofile; i++) {
+	    sts = sof_profile (dev);
+	    if (sts < 0) {
+	        OUFXS_ERR ("%s: sof_profile() returned %d - profiling halted",
+		  __func__, sts);
+		break;
+	    }
+	}
+	OUFXS_INFO ("%s: will not set state to OK in profile mode", __func__);
+	OUFXS_INFO ("%s: to initialize, set sofprofile to 0 and re-plug",
+	  __func__);
+	return;
     }
 
     OUFXS_INFO ("%s: board %d has been fully setup", __func__, dev->slot + 1);
@@ -1898,7 +2074,7 @@ static int oufxs_close (struct dahdi_chan *chan)
 {
     struct oufxs_dahdi *dev = chan->pvt;
 
-    OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "close()");
+    OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s(): starting", __func__);
 
     if (!dev) {	/* can this happen during oufxs_disconnect()? */
         OUFXS_ERR ("%s: no device data for chan %d", __func__, chan->chanpos);
@@ -1917,6 +2093,8 @@ static int oufxs_close (struct dahdi_chan *chan)
 
     /* decrement driver-side reference count */
     kref_put (&dev->kref, oufxs_delete);
+
+    OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: finished", __func__);
 
     return (0);
 }
@@ -2159,6 +2337,10 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	}
 	break;
 #endif
+
+      case OUFXS_IOCBURNSN:
+	retval = burn_serial (dev, data);
+	break;
 
       default:
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: %d", __func__, cmd);
@@ -2546,7 +2728,7 @@ static void oufxs_disconnect (struct usb_interface *intf)
     unsigned long flags;		/* irqsave flags */
     int slot;
     
-    OUFXS_DEBUG (OUFXS_DBGVERBOSE, "%s: starting", __func__);
+    OUFXS_DEBUG (OUFXS_DBGVERBOSE, "%s(): starting", __func__);
 
     /* get us a pointer to dev, then clear it from the USB interface */
     dev = usb_get_intfdata (intf);
