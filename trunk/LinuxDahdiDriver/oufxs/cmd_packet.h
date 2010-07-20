@@ -8,6 +8,9 @@ typedef unsigned char __u8;
 enum enum_oufxs_cmd {
     READ_VERSION	= 0x00,
 
+    GET_SVN_REVISION	= 0x60,		/* get the SVN revision number	*/
+    WRITE_SERIAL_NO	= 0x61,		/* write serial # in eeprom	*/
+   	
     START_STOP_IOV2	= 0x7D,		/* cease/start PCM I/O vrsn.2	*/
     START_STOP_IO	= 0x7E,		/* cease/start PCM I/O		*/
     SOF_PROFILE		= 0x7F,		/* perform SOF profiling	*/
@@ -35,7 +38,20 @@ union oufxs_packet {
 	__u8	len;
 	__u8	mjr;
 	__u8	mnr;
-    }		rdvrsn_rep;
+    }		rdvrsn_rpl;
+    struct {
+        __u8	cmd;
+    }		svnrev_req;
+    struct {
+        __u8	cmd;
+	__u8	rsv;
+	char	str[6];
+    }		svnrev_rpl;
+    struct {
+        __u8	cmd;
+	__u8	rsv;
+	char	str[4];
+    }		serial_req, serial_rpl;
     struct {
 	__u8	cmd;
 	__u8	reg;
@@ -59,8 +75,21 @@ union oufxs_packet {
 	__u8	val;
 	__u8	seq;	/* DR setting sequence # */
     }		strtstpv2_req;
+    struct {
+	__u8	cmd;
+    }		sofprof_req;
+    struct {
+    	__u8	cmd;
+	__u8	rsv;
+	__u16	sof[15];
+    }		sofprof_rpl;
 };
 
+#define GET_SVN_REVISION_REQ()		\
+		{.svnrev_req={.cmd=GET_SVN_REVISION}}
+#define WRITE_SERIAL_NO_REQ(s3,s2,s1,s0) \
+		{.serial_req={.cmd=WRITE_SERIAL_NO, \
+		 .str[0]=s0,.str[1]=s1,.str[2]=s2,.str[3]=s3}}
 #define	PROSLIC_RDIRECT_REQ(r)		\
 		{.rdirect_req={.cmd=PROSLIC_RDIRECT,.reg=(r)}}
 #define PROSLIC_WDIRECT_REQ(r,v)	\
@@ -73,12 +102,15 @@ union oufxs_packet {
 		{.strtstp_req={.cmd=START_STOP_IO,.val=(v)}}
 #define START_STOP_IOV2_REQ(v,s)	\
 		{.strtstpv2_req={.cmd=START_STOP_IOV2,.val=(v),.seq=(s)}}
+#define SOFPROFILE_REQ()			\
+		{.sofprof_req={.cmd=SOF_PROFILE}}
 
 
 #define PROSLIC_RDIRECT_RPV(p)	p.rdirect_rpl.val
 #define PROSLIC_WDIRECT_RPV(p)	p.wdirect_rpl.val
 #define PROSLIC_RDINDIR_RPV(p)	le16_to_cpu(p.rdindir_rpl.val)
 #define PROSLIC_WRINDIR_RPV(p)	le16_to_cpu(p.wrindir_rpl.val)
+#define SOFPROFILE_TMRVAL(p,i)	le16_to_cpu(p.sof[i])
 
 
 #define OUFXS_DTHDR_SIZE	8
