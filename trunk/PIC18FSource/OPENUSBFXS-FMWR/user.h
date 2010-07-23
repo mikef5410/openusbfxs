@@ -63,6 +63,10 @@ typedef enum
     DEBUG_RST_PSWRD = 0x44,
     */
 
+    // return svn revision (as a null-terminated string) 
+    GET_SVN_REVISION= 0x60,
+    WRITE_SERIAL_NO = 0x61,
+
     // set isochronous IO on/off
     START_STOP_ISOV2= 0x7d,	// v2 adds a sequence number for setting DRs
     START_STOP_ISO  = 0x7e,

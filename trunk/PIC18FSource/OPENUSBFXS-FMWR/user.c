@@ -31,6 +31,11 @@
 #include "tmr1_isr.h"
 #include "proslic.h"
 #include "pcmpacket.h"
+#include "eeprom.h"
+
+/** ROM CONSTANTS******************************************************/
+rom const char *svnrevstr = "$Revision$";
+
 //////////////// END contributed code by avarvit
 
 /** V A R I A B L E S ********************************************************/
@@ -304,6 +309,7 @@ void ServiceRequests(void) {
     WORD indval;
     unsigned short i;			// general-purpose counter
     BYTE *bp;
+    char *cp;
     
     //Check to see if data has arrived
     if(!USBHandleBusy(USBGenericOutHandle)) {        
@@ -398,6 +404,28 @@ void ServiceRequests(void) {
 		// pasHout = 0;
 		counter = 0x04;
 		break;
+
+	    case GET_SVN_REVISION:	// UNTESTED!! TESTME!!
+	        cp = (svnrevstr + 10);
+		while (*cp && (*cp < '0' || *cp > '9')) cp++;
+		bp = &INPacket._byte[2];
+		counter = 1; // at least the terminating \0
+		while (*cp && *cp >= '0' && *cp <= '9') {
+		    *bp++ = (BYTE) *cp++;
+		    if (bp - &INPacket._byte[0] >= sizeof (INPacket) - 1) break;
+		}
+		*bp = 0;
+		break;
+
+	    case WRITE_SERIAL_NO:
+		// note: this primitive expects the serial number as a four-byte
+		// binary string; this is converted into hex when reported to
+		// the host during USB device enumeration
+	        eeWrite (EE_SERIAL_NO, &OUTPacket._byte[2], EE_SERIAL_NO_LEN);
+		eeRead (0, &INPacket._byte[2], EE_SERIAL_NO_LEN); // verify it
+		counter = 2 + EE_SERIAL_NO_LEN;
+		break;
+		
 
 	    case START_STOP_ISOV2:
 	        drsena = 1;
