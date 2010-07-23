@@ -245,20 +245,21 @@ firstof32					; T:@+11
 ;	a PCLK-high half-cycle of 23TCy in duration (PCLK lowered at @+23)
 
 
-; HEREHERE: fix doc
 
-	; task (*): lower FSYNC
+	; task (0): lower FSYNC
 
 	BCF		pcm_3210_fsync, ACCESS	; C:1
 
 						; T:@+12
 	; task (i): prepare the DRX signal (our output -- must
-	; be ready before the falling edge of PCLK)
+	; have been asserted before the falling edge of PCLK)
 
 
 	RLCF		byteDRX, F, BANKED	; C:1 rotate left through carry
 	BNC		fo32_clr_DRX		; C:1/2 check if carry is set
       #ifdef TEST_PCM_TIMING
+	; if TEST_PCM_TIMING is defined, we ignore the actual data in byteDRX
+	; (data sent by the host) and just toggle the DRX output
 	BTG		pcm_3210_drx, ACCESS	; (C:1) just toggle (for tests)
       #else
 	BSF		pcm_3210_drx, ACCESS	; C:1 it is set, so set DRX to 1
@@ -267,7 +268,7 @@ firstof32					; T:@+11
 
 fo32_clr_DRX					; T:@+15
 
-      #ifdef TEST_PCM_TIMING
+      #ifdef TEST_PCM_TIMING			; same here
 	BTG		pcm_3210_drx, ACCESS	; (C:1) just toggle (for tests)
       #else
 	BCF		pcm_3210_drx, ACCESS	; C:1 carry not set, clear DRX
@@ -301,23 +302,6 @@ fo32_DRX_ok					; T:@+17 via both paths
 	BCF		pcm_3210_pclk, ACCESS	; C:1 lower PCLK
 
 						; T:@+24
-
-	; task (vi): lower FSYNC
-	;NOP					; C:1
-	;NOP					; C:1
-	;NOP					; C:1
-	;NOP					; C:1
-	;NOP					; C:1
-	;NOP					; C:1
-	;NOP					; C:1
-	;NOP					; C:1
-	;NOP					; C:1
-	;NOP					; C:1
-	;NOP					; C:1
-
-	;BCF		pcm_3210_fsync, ACCESS	; C:1
-
-	;					; T:@+30
 
 	; finished with all of our tasks, time to return
 	RETFIE		FAST			; C:2
@@ -451,7 +435,7 @@ lastof32					; T:@+15
       #else ; DEBUG_CYCLES
       						; T:@+15
 
-	INCF		ppindex, W, BANKED	; is ppindex about to overflow?
+	INCF		ppindex, W, BANKED	; C:1 ppindex about to overflow?
 	BTFSC		WREG, 3, ACCESS		; C:1/2
 	BRA		lastnosync		; C:2
 
@@ -1056,7 +1040,7 @@ usbOUTodd					; T:@+23
 
 						; T:@+39
 
-	; task (vii): toggle outodev (next time do an odd OUT)
+	; task (vii): toggle outodev (next time do an even OUT)
 
 	BTG		outodev, 0, BANKED	; C:1
 

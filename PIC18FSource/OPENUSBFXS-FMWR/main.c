@@ -463,7 +463,7 @@ void USBCB_SOF_Handler(void)
 // PCM audio I/O and other timed signals to the 3210
 
 
-#if (USB_MAX_EP_NUMBER==2)
+#if (USB_MAX_EP_NUMBER>=2)
 
 # if 0 // first try
     // send to host
@@ -522,6 +522,13 @@ void USBCB_SOF_Handler(void)
 	    BDT[EP(2,OUT_FROM_HOST,1)].STAT.Val |= _USIE|_DTSEN;
 	}
 	#endif
+
+	#if 0
+	BDT[EP(3,IN_TO_HOST,1)].ADR = IN_PCMData1;
+	BDT[EP(3,IN_TO_HOST,1)].CNT = 16;
+	BDT[EP(3,IN_TO_HOST,1)].STAT.Val &= _DTSMASK;
+	BDT[EP(3,IN_TO_HOST,1)].STAT.Val |= _USIE|_DTSEN;
+	#endif
     }
     else {
 	// even transaction
@@ -539,6 +546,13 @@ void USBCB_SOF_Handler(void)
 	    BDT[EP(2,OUT_FROM_HOST,0)].STAT.Val |= _USIE|_DTSEN;
 	}
 	#endif
+
+	#if 0
+	BDT[EP(3,IN_TO_HOST,0)].ADR = IN_PCMData0;
+	BDT[EP(3,IN_TO_HOST,0)].CNT = 16;
+	BDT[EP(3,IN_TO_HOST,0)].STAT.Val &= _DTSMASK;
+	BDT[EP(3,IN_TO_HOST,0)].STAT.Val |= _USIE|_DTSEN;
+	#endif
     }
     turn ^= 1;
     #endif
@@ -548,7 +562,7 @@ void USBCB_SOF_Handler(void)
     #endif
 
 
-#endif // (USB_MAX_EP_NUMBER==2)
+#endif // (USB_MAX_EP_NUMBER>=2)
 
 
     // No need to clear UIRbits.SOFIF to 0 here.
@@ -660,7 +674,7 @@ void USBCBInitEP(void)
     // ready to receive any frame that the USB host sends to the EP
     USBGenericOutHandle = USBGenRead(USBGEN_EP_NUM,(BYTE*)&OUTPacket,USBGEN_EP_SIZE);
 
-#if (USB_MAX_EP_NUMBER==2) // avarvit
+#if (USB_MAX_EP_NUMBER>=2) // avarvit
     //test
     //USBEnableEndpoint(2,USB_OUT_ENABLED|USB_IN_ENABLED|USB_HANDSHAKE_ENABLED|USB_DISALLOW_SETUP);
     USBEnableEndpoint(2,USB_OUT_ENABLED|USB_IN_ENABLED|USB_HANDSHAKE_DISABLED|USB_DISALLOW_SETUP);

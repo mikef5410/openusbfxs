@@ -172,7 +172,7 @@ ROM USB_DEVICE_DESCRIPTOR device_dsc=
     0x0001,                 // Device release number in BCD format
     0x01,                   // Manufacturer string index
     0x02,                   // Product string index
-    0x00,                   // Device serial number string index
+    0x03,                   // Device serial number string index
     0x01                    // Number of possible configurations
 };
 
@@ -182,9 +182,11 @@ ROM BYTE configDescriptor1[]={
     0x09,//sizeof(USB_CFG_DSC),    // Size of this descriptor in bytes
     USB_DESCRIPTOR_CONFIGURATION,  // CONFIGURATION descriptor type
 //////////////// BEGIN contributed code by avarvit
-#if (USB_MAX_EP_NUMBER==2) // this is the case with current defines
+#if (USB_MAX_EP_NUMBER==3)   // also include an INT EP
+    0x35,0x00,              // Total length of data for this cfg
+#elif (USB_MAX_EP_NUMBER==2) // this is the case with current defines
     0x2E,0x00,              // Total length of data for this cfg
-#else                      // by default, USB_MAX_EP_NUMBER is 1
+#else                       // by default, USB_MAX_EP_NUMBER is 1
     0x20,0x00,              // Total length of data for this cfg
 #endif	// USB_MAX_EP_NUMBER
 //////////////// END contributed code by avarvit
@@ -201,7 +203,9 @@ ROM BYTE configDescriptor1[]={
     USB_DESCRIPTOR_INTERFACE,      // INTERFACE descriptor type
     0,                      // Interface Number
     0,                      // Alternate Setting Number
-#if (USB_MAX_EP_NUMBER==2)
+#if (USB_MAX_EP_NUMBER==3)
+    5,                      // Number of endpoints in this intf
+#elif (USB_MAX_EP_NUMBER==2)
     4,                      // Number of endpoints in this intf
 #else	// by default, USB_MAX_EP_NUMBER is 1
     2,
@@ -241,7 +245,7 @@ ROM BYTE configDescriptor1[]={
   non-complying, especially since packet size 16 is the only one that will
   be able to work for the time.
 */
-#if (USB_MAX_EP_NUMBER==2)
+#if (USB_MAX_EP_NUMBER>=2)
     0x07,                   /*sizeof(USB_EP_DSC)*/
     USB_DESCRIPTOR_ENDPOINT,//Endpoint Descriptor
     _EP02_OUT,              //EndpointAddress
@@ -257,8 +261,17 @@ ROM BYTE configDescriptor1[]={
     _ISO|_SY|_DE,           //Attributes
     // see note above about endpoint payload size
     0x10,0x00,              //size, 16 bytes
-    1                       //Interval: for ISO, this is 2^(1-1)*1ms = 1ms
+    1,                      //Interval: for ISO, this is 2^(1-1)*1ms = 1ms
 #endif	// USB_MAX_EP_NUMBER
+
+#if (USB_MAX_EP_NUMBER==3)
+    0x07,                  /*sizeof(USB_EP_DSC)*/
+    USB_DESCRIPTOR_ENDPOINT,//Endpont Descriptor
+    _EP03_IN,              //EndpointAddress
+    _INT,                  //Attributes
+    0x10,0x00,             //size, 16 bytes
+    1,                     //Interval
+#endif
 //////////////// END contributed code by avarvit
 };
 
@@ -279,6 +292,12 @@ sizeof(sd002),USB_DESCRIPTOR_STRING,{
 'O','p','e','n',' ','U','S','B',' ','F','X','S',' ','b','o','a','r','d'
 }};
 
+//Product serial number; actual serial is from eeprom, see "usb_device.c"
+struct{BYTE bLength;BYTE bDscType;WORD string[8];}sd003={
+sizeof(sd003),USB_DESCRIPTOR_STRING,{
+'d','e','a','d','b','e','e','f'
+}};
+
 //Array of configuration descriptors
 ROM BYTE *ROM USB_CD_Ptr[]=
 {
@@ -289,7 +308,8 @@ ROM BYTE *ROM USB_SD_Ptr[]=
 {
     (ROM BYTE *ROM)&sd000,
     (ROM BYTE *ROM)&sd001,
-    (ROM BYTE *ROM)&sd002
+    (ROM BYTE *ROM)&sd002,
+    (ROM BYTE *)&sd003
 };
 
 /** EOF usb_descriptors.c ***************************************************/

@@ -1,17 +1,16 @@
 # MPLAB IDE generated this makefile for use with GNU make.
 # Project: OPENUSBFXS-FMWR.mcp
-# Date: Fri Mar 19 07:27:17 2010
+# Date: Sun May 30 09:06:32 2010
 
-
-MCHP_HOME=/cygdrive/c/Program\ Files/Microchip/MCC18
-AS = $(MCHP_HOME)/mpasm/mpasmwin.exe
-CC = $(MCHP_HOME)/bin/mcc18.exe
-LD = $(MCHP_HOME)/bin/mplink.exe
-AR = $(MCHP_HOME)/bin/mplib.exe
+MCC18PATH=/cygdrive/c/Program\ Files/Microchip/MCC18
+AS = $(MCC18PATH)/mpasm/mpasmwin.exe
+CC = $(MCC18PATH)/bin/mcc18.exe
+LD = $(MCC18PATH)/bin/mplink.exe
+AR = $(MCC18PATH)/bin/mplib.exe
 RM = rm
 
-OPENUSBFXS-FMWR.cof : Objects/OPENUSBFXS-FMWR/user.o Objects/OPENUSBFXS-FMWR/main.o Objects/OPENUSBFXS-FMWR/usb_descriptors.o Objects/OPENUSBFXS-FMWR/usb_device.o Objects/OPENUSBFXS-FMWR/usb_function_generic.o Objects/OPENUSBFXS-FMWR/tmr1_isr.o Objects/OPENUSBFXS-FMWR/proslic.o
-	$(LD) /l"C:\Program Files\Microchip\MCC18\lib" "18f2550.lkr" "Objects\OPENUSBFXS-FMWR\user.o" "Objects\OPENUSBFXS-FMWR\main.o" "Objects\OPENUSBFXS-FMWR\usb_descriptors.o" "Objects\OPENUSBFXS-FMWR\usb_device.o" "Objects\OPENUSBFXS-FMWR\usb_function_generic.o" "Objects\OPENUSBFXS-FMWR\tmr1_isr.o" "Objects\OPENUSBFXS-FMWR\proslic.o" /u_CRUNTIME /z__MPLAB_BUILD=1 /m"OPENUSBFXS-FMWR.map" /w /o"OPENUSBFXS-FMWR.cof"
+OPENUSBFXS-FMWR.cof : Objects/OPENUSBFXS-FMWR/user.o Objects/OPENUSBFXS-FMWR/main.o Objects/OPENUSBFXS-FMWR/usb_descriptors.o Objects/OPENUSBFXS-FMWR/usb_device.o Objects/OPENUSBFXS-FMWR/usb_function_generic.o Objects/OPENUSBFXS-FMWR/tmr1_isr.o Objects/OPENUSBFXS-FMWR/proslic.o Objects/OPENUSBFXS-FMWR/eeprom.o
+	$(LD) /l"C:\Program Files\Microchip\MCC18\lib" "18f2550.lkr" "Objects\OPENUSBFXS-FMWR\user.o" "Objects\OPENUSBFXS-FMWR\main.o" "Objects\OPENUSBFXS-FMWR\usb_descriptors.o" "Objects\OPENUSBFXS-FMWR\usb_device.o" "Objects\OPENUSBFXS-FMWR\usb_function_generic.o" "Objects\OPENUSBFXS-FMWR\tmr1_isr.o" "Objects\OPENUSBFXS-FMWR\proslic.o" "Objects\OPENUSBFXS-FMWR\eeprom.o" /u_CRUNTIME /z__MPLAB_BUILD=1 /m"OPENUSBFXS-FMWR.map" /w /o"OPENUSBFXS-FMWR.cof"
 
 Objects/OPENUSBFXS-FMWR/user.o : user.c ../../../../../Program\ Files/Microchip/MCC18/h/stdio.h ../../../../../Program\ Files/Microchip/MCC18/h/stdlib.h ../../../../../Program\ Files/Microchip/MCC18/h/string.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/USB/usb_device.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/usb/usb_common.h ../../../../../Program\ Files/Microchip/MCC18/h/spi.h proslic.h user.c ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/Compiler.h ../../../../../Program\ Files/Microchip/MCC18/h/p18cxxx.h ../../../../../Program\ Files/Microchip/MCC18/h/p18f2550.h ../../../../../Program\ Files/Microchip/MCC18/h/stdarg.h ../../../../../Program\ Files/Microchip/MCC18/h/stddef.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/GenericTypeDefs.h HardwareProfile.h usb_config.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/USB/usb_ch9.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/USB/usb_hal.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/USB/usb_hal_pic18.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/USB/usb.h ../../../../../Program\ Files/Microchip/MCC18/h/limits.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/usb/usb_ch9.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/usb/usb_hal.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/usb/usb_device.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/USB/usb_function_generic.h ../../../../../Program\ Files/Microchip/MCC18/h/pconfig.h user.h tmr1_isr.h pcmpacket.h
 	$(CC) -p=18F2550 /i"C:\Program Files\Microchip\Microchip Solutions\Microchip\Include" -I"C:\Program Files\Microchip\Microchip Solutions\Microchip\Usb" -I"C:\Program Files\Microchip\MCC18\h" -I"." "user.c" -fo=".\Objects\OPENUSBFXS-FMWR\user.o" -Opa-
@@ -34,6 +33,9 @@ Objects/OPENUSBFXS-FMWR/tmr1_isr.o : tmr1_isr.asm ../../../../../Program\ Files/
 Objects/OPENUSBFXS-FMWR/proslic.o : proslic.c ../../../../../Program\ Files/Microchip/MCC18/h/stdio.h ../../../../../Program\ Files/Microchip/MCC18/h/stdlib.h ../../../../../Program\ Files/Microchip/MCC18/h/string.h ../../../../../Program\ Files/Microchip/MCC18/h/spi.h proslic.h proslic.c ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/Compiler.h ../../../../../Program\ Files/Microchip/MCC18/h/p18cxxx.h ../../../../../Program\ Files/Microchip/MCC18/h/p18f2550.h ../../../../../Program\ Files/Microchip/MCC18/h/stdarg.h ../../../../../Program\ Files/Microchip/MCC18/h/stddef.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/GenericTypeDefs.h ../../../../../Program\ Files/Microchip/MCC18/h/pconfig.h HardwareProfile.h
 	$(CC) -p=18F2550 /i"C:\Program Files\Microchip\Microchip Solutions\Microchip\Include" -I"C:\Program Files\Microchip\Microchip Solutions\Microchip\Usb" -I"C:\Program Files\Microchip\MCC18\h" -I"." "proslic.c" -fo=".\Objects\OPENUSBFXS-FMWR\proslic.o" -Opa-
 
+Objects/OPENUSBFXS-FMWR/eeprom.o : eeprom.c ../../../../../Program\ Files/Microchip/MCC18/h/stdio.h ../../../../../Program\ Files/Microchip/MCC18/h/stdlib.h ../../../../../Program\ Files/Microchip/MCC18/h/string.h eeprom.h eeprom.c ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/Compiler.h ../../../../../Program\ Files/Microchip/MCC18/h/p18cxxx.h ../../../../../Program\ Files/Microchip/MCC18/h/p18f2550.h ../../../../../Program\ Files/Microchip/MCC18/h/stdarg.h ../../../../../Program\ Files/Microchip/MCC18/h/stddef.h ../../../../../Program\ Files/Microchip/Microchip\ Solutions/Microchip/Include/GenericTypeDefs.h
+	$(CC) -p=18F2550 /i"C:\Program Files\Microchip\Microchip Solutions\Microchip\Include" -I"C:\Program Files\Microchip\Microchip Solutions\Microchip\Usb" -I"C:\Program Files\Microchip\MCC18\h" -I"." "eeprom.c" -fo=".\Objects\OPENUSBFXS-FMWR\eeprom.o" -Opa-
+
 clean : 
-	$(RM) "Objects\OPENUSBFXS-FMWR\user.o" "Objects\OPENUSBFXS-FMWR\main.o" "Objects\OPENUSBFXS-FMWR\usb_descriptors.o" "Objects\OPENUSBFXS-FMWR\usb_device.o" "Objects\OPENUSBFXS-FMWR\usb_function_generic.o" "Objects\OPENUSBFXS-FMWR\tmr1_isr.o" "Objects\OPENUSBFXS-FMWR\tmr1_isr.ERR" "tmr1_isr.lst" "Objects\OPENUSBFXS-FMWR\proslic.o" "OPENUSBFXS-FMWR.cof" "OPENUSBFXS-FMWR.hex" "OPENUSBFXS-FMWR.map"
+	$(RM) "Objects\OPENUSBFXS-FMWR\user.o" "Objects\OPENUSBFXS-FMWR\main.o" "Objects\OPENUSBFXS-FMWR\usb_descriptors.o" "Objects\OPENUSBFXS-FMWR\usb_device.o" "Objects\OPENUSBFXS-FMWR\usb_function_generic.o" "Objects\OPENUSBFXS-FMWR\tmr1_isr.o" "Objects\OPENUSBFXS-FMWR\tmr1_isr.ERR" "tmr1_isr.lst" "Objects\OPENUSBFXS-FMWR\proslic.o" "Objects\OPENUSBFXS-FMWR\eeprom.o" "OPENUSBFXS-FMWR.cof" "OPENUSBFXS-FMWR.hex" "OPENUSBFXS-FMWR.map"
 
