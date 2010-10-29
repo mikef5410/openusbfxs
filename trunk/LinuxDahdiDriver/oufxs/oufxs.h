@@ -130,6 +130,7 @@ struct oufxs_stats {
 #define OUFXS_IOCGSTATS	_IOR(OUFXS_IOC_MAGIC, 6, struct oufxs_stats)
 /* burn a serial number */
 #define OUFXS_IOCBURNSN	_IO(OUFXS_IOC_MAGIC, 7)
-#define OUFXS_MAX_IOCTL	7
+#define OUFXS_IOCBOOTLOAD _IO(OUFXS_IOC_MAGIC, 8)
+#define OUFXS_MAX_IOCTL	8
 
 #endif /* OUFXS_H */

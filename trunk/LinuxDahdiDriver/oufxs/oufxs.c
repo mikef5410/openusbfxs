@@ -126,6 +126,8 @@ static int hifreq = 1;				/* ~80kHz, for L1=100uH */
 #ifdef DEBUGSEQMAP
 static int complaintimes = 0;			/* how many times to complain */
 #endif	/* DEBUGSEQMAP */
+static int availinerror = 0;			/* make available even when
+						 * in error condition */
 
 module_param(debuglevel, int, S_IWUSR|S_IRUGO);
 module_param(retoncnvfail, bool, S_IWUSR|S_IRUGO);
@@ -144,6 +146,7 @@ module_param(hifreq, int, S_IWUSR|S_IRUGO);
 #ifdef DEBUGSEQMAP
 module_param(complaintimes, int, S_IWUSR|S_IRUGO);
 #endif	/* DEBUGSEQMAP */
+module_param(availinerror, bool, S_IWUSR|S_IRUGO);
 
 /* our device structure */
 
@@ -503,6 +506,36 @@ static int burn_serial (struct oufxs_dahdi *dev, unsigned long serial)
       "%s: burnt serial %02X%02X%02X%02X (got back %02X%02X%02X%02X)",
       __func__, b3, b2, b1, b0, rpl.serial_rpl.str[0], rpl.serial_rpl.str[1],
       rpl.serial_rpl.str[2], rpl.serial_rpl.str[3]);
+
+    return 0;
+}
+
+
+/* instruct board to reboot in bootloader mode */
+static int reboot_bootload (struct oufxs_dahdi *dev)
+{
+    union oufxs_packet req = REBOOT_BOOTLOADER_REQ ();
+    int rlngth;
+    int length;
+    int retval;
+
+    int outpipe = usb_sndbulkpipe (dev->udev, dev->ep_bulk_out);
+
+    rlngth = sizeof(req.serial_req);
+    retval = usb_bulk_msg (dev->udev, outpipe, &req, rlngth, &length, 1000);
+    if (retval) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(out) returned %d", __func__, retval);
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+        return -EIO;
+    }
+
+    /* at this point, the device should reboot, so we will lose it */
+
+    OUFXS_DEBUG (OUFXS_DBGTERSE,
+      "%s: rebooting device in bootloader mode", __func__);
 
     return 0;
 }
@@ -2047,7 +2080,10 @@ static int oufxs_open (struct dahdi_chan *chan)
 
     /* don't proceed if the device state is not OK yet (or is unloading) */
     if (dev->state != OUFXS_STATE_OK) {
-        return (dev->state == OUFXS_STATE_INIT)? -EAGAIN : -EIO;
+	if (dev->state == OUFXS_STATE_INIT) return -EAGAIN;
+	if (!availinerror) {
+	    return -EIO;
+	}
     }
 
     /* increment driver-side usage count for device */
@@ -2189,8 +2225,8 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
     mutex_lock (&dev->iomutex);
 
     /* check the device state and refuse to proceed if device is not yet
-     * ready, is unloading, or is in error */
-    if (dev->state != OUFXS_STATE_OK) {
+     * ready, is unloading, or is in error (unless availinerror is set) */
+    if (!availinerror && (dev->state != OUFXS_STATE_OK)) {
 	retval = (dev->state == OUFXS_STATE_INIT)? -EBUSY : -ENODEV;
 	goto ioctl_exit;
     }
@@ -2198,7 +2234,7 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
     switch (cmd) {
       /* dahdi-defined generic ioctls */
 
-      case DAHDI_ONHOOKTRANSFER:
+      case DAHDI_ONHOOKTRANSFER:	/* go into on-hook transfer mode */
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: DAHDI_ONHOOKTRANSFER", __func__);
 	/* data contains the milliseconds to hold oht mode */
         if (get_user (i, (__user int *) data)) {
@@ -2215,7 +2251,8 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	}
 	break;
 
-      case DAHDI_SETPOLARITY:
+
+      case DAHDI_SETPOLARITY:		/* set line polarity to fwd/rev */
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: DAHDI_SETPOLARITY", __func__);
 	/* data is zero for normal and non-zero for reversepolarity */
         if (get_user (i, (__user int *) data)) {
@@ -2239,21 +2276,24 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	dr_write (sts, 64, dev->lasttxhook, drval, ioctl_io_error);
 	break;
 
-      case DAHDI_VMWI:
+
+      case DAHDI_VMWI:		/* set visual message waiting indication */
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: DAHDI_VMWI", __func__);
         /* we don't implement this */
 	retval = -ENOTTY;
 	break;
 
-      case DAHDI_SET_HWGAIN:
+
+      case DAHDI_SET_HWGAIN:	/* set the hardware gain */
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: DAHDI_SET_HWGAIN", __func__);
 	/* this ioctl applies only to FXO modules */
 	retval = -EINVAL;
 	break;
 
+
       /* wctdm-specific ioctls, so we can cooperate with "fxstest" */
 
-      case WCTDM_GET_STATS:
+      case WCTDM_GET_STATS:	/* get statistics */
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: WCTDM_GET_STATS", __func__);
 	dr_read (sts, 80, drval,  ioctl_io_error);
 	stats.tipvolt = (int) drval * -376;
@@ -2266,7 +2306,8 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	}
         break;
 
-      case WCTDM_GET_REGS:
+
+      case WCTDM_GET_REGS:	/* get values of all direct/indirect regs */
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: WCTDM_GET_REGS", __func__);
 	memset (&regs, 0, sizeof (regs));
         for (i = 0; i < NUM_REGS; i++) {	/* defined in "wctdm_user.h" */
@@ -2284,30 +2325,36 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	}
 	break;
 
-      case WCTDM_SET_REG:
+
+      case WCTDM_SET_REG:	/* set a register to a given value */
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: WCTDM_SET_REG", __func__);
         /* too dangerous to implement */
 	retval = -ENOTTY;
 	break;
 
-      case WCTDM_SET_ECHOTUNE:
+
+      case WCTDM_SET_ECHOTUNE:	/* set echo tune */
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: WCTDM_SET_ECHOTUNE", __func__);
         /* only FXO modules have have that... */
         retval = -EINVAL;
 	break;
 
+
       /* OUFXS-specific ioctls */
-      case OUFXS_IOCRESET:
+
+      case OUFXS_IOCRESET:	/* reset the board (unimplemented) */
         OUFXS_WARN ("%s: OUFXS_IOCRESET is not yet implemented", __func__);
 	retval = -ENOTTY;
 	break;
 
-      case OUFXS_IOCREGDMP:
+
+      case OUFXS_IOCREGDMP:	/* cause a register dump to be kprintf'ed */
 	dump_direct_regs (dev, "ioctl-requested");
 	dump_indirect_regs (dev, "ioctl-requested");
         break;
 
-      case OUFXS_IOCSRING:
+
+      case OUFXS_IOCSRING:	/* set ringing state (probably buggy) */
         if (data) {
 	    oufxs_hooksig (dev->chans[0], DAHDI_TXSIG_START);
 	}
@@ -2316,7 +2363,8 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	}
 	break;
 
-      case OUFXS_IOCGHOOK:
+
+      case OUFXS_IOCGHOOK:	/* get back the hook state */
 #ifdef HWHOOK
         retval = __put_user (dev->hook? 1:0, (int __user *) data);
 #else
@@ -2324,8 +2372,9 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 #endif
 	break;
 
+
 #ifdef HWDTMF
-      case OUFXS_IOCGDTMF:
+      case OUFXS_IOCGDTMF:	/* consume the last DTMF digit available */
         if (dev->dtmf && (dev->dtmf != 0xff)) {
 	    retval = __put_user (
 	      (int) slic_dtmf_table[dev->dtmf & 0xf],
@@ -2338,9 +2387,16 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	break;
 #endif
 
-      case OUFXS_IOCBURNSN:
-	retval = burn_serial (dev, data);
+
+      case OUFXS_IOCBURNSN:	/* burn a serial number on EEPROM */
+	retval = burn_serial (dev, * ((unsigned long *)data));
 	break;
+
+
+      case OUFXS_IOCBOOTLOAD:	/* reboot in bootloader mode */
+        retval = reboot_bootload (dev);
+	break;
+
 
       default:
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: %d", __func__, cmd);
