@@ -2,6 +2,8 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <string.h>
+#include <ctype.h>
 #include <dahdi/user.h>
 #include "oufxs.h"
 
@@ -20,12 +22,19 @@ static void chanusage ()
     fprintf (stderr, "\t<chanX> must be a number between 1 and 999\n");
 }
 
+static void serusage () 
+{
+    usage ();
+    fprintf (stderr, "\t<serial> must consist of exactly eight hex digits\n");
+}
+
 
 main (int argc, char **argv)
 {
     me = argv[0];
     int fd;
     unsigned long serial;
+    unsigned int b3 = 0, b2 = 0, b1 = 0, b0 = 0;
     int channo;
     int i;
 
@@ -34,10 +43,33 @@ main (int argc, char **argv)
 	exit (1);
     }
 
-    serial = atol (argv [argc - 1]);
-    if (!serial) {
-        usage ();  
+    if (strcmp (argv[argc - 1], "-r") && strlen (argv [argc - 1]) != 8) {
+        serusage ();
 	exit (1);
+    }
+    else {
+	for (i = 0; i < 8; i++) {
+	    if (!isxdigit (argv [argc - 1][i])) {
+		serusage ();
+		exit (1);
+	    }
+	}
+    }
+    sscanf (argv[argc - 1], "%2x%2x%2x%2x", &b3, &b2, &b1, &b0);
+    fprintf (stderr, "%2X%2X%2X%2X\n", b3, b2, b1, b0);
+    serial = (b3 & 0xff) << 24 |
+             (b2 & 0xff) << 16 |
+	     (b1 & 0xff) <<  8 |
+	     (b0 & 0xff);
+
+    if (!serial) {
+    	if (!strcmp (argv[argc - 1], "-r")) {
+	    serial = 0xEEEEEEEE;
+	}
+	else {
+	    usage ();  
+	    exit (1);
+	}
     }
 
     channo = atoi (argv[1]);

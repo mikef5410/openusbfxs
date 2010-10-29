@@ -10,6 +10,7 @@ enum enum_oufxs_cmd {
 
     GET_SVN_REVISION	= 0x60,		/* get the SVN revision number	*/
     WRITE_SERIAL_NO	= 0x61,		/* write serial # in eeprom	*/
+    REBOOT_BOOTLOAD	= 0x62,		/* reboot in bootloader mode	*/
    	
     START_STOP_IOV2	= 0x7D,		/* cease/start PCM I/O vrsn.2	*/
     START_STOP_IO	= 0x7E,		/* cease/start PCM I/O		*/
@@ -21,7 +22,6 @@ enum enum_oufxs_cmd {
     PROSLIC_WDIRECT	= 0x83,		/* write direct register	*/
     PROSLIC_RDINDIR	= 0x84,		/* read indirect register	*/
     PROSLIC_WRINDIR	= 0x85,		/* write indirect register	*/
-
 
     RESET		= 0xFF
 };
@@ -50,8 +50,11 @@ union oufxs_packet {
     struct {
         __u8	cmd;
 	__u8	rsv;
-	char	str[4];
+	__u8	str[4];
     }		serial_req, serial_rpl;
+    struct {
+        __u8	cmd;
+    }		bootload_req; /* no reply for this, board just reboots */
     struct {
 	__u8	cmd;
 	__u8	reg;
@@ -89,7 +92,9 @@ union oufxs_packet {
 		{.svnrev_req={.cmd=GET_SVN_REVISION}}
 #define WRITE_SERIAL_NO_REQ(s3,s2,s1,s0) \
 		{.serial_req={.cmd=WRITE_SERIAL_NO, \
-		 .str[0]=s0,.str[1]=s1,.str[2]=s2,.str[3]=s3}}
+		 .str[0]=s3,.str[1]=s2,.str[2]=s1,.str[3]=s0}}
+#define REBOOT_BOOTLOADER_REQ()		\
+		{.bootload_req={.cmd=REBOOT_BOOTLOAD}}
 #define	PROSLIC_RDIRECT_REQ(r)		\
 		{.rdirect_req={.cmd=PROSLIC_RDIRECT,.reg=(r)}}
 #define PROSLIC_WDIRECT_REQ(r,v)	\
