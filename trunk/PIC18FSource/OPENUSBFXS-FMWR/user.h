@@ -32,6 +32,10 @@
 /* PICDEM FS USB Demo Version */
 #define MINOR_VERSION   0x00    //Demo Version 1.00
 #define MAJOR_VERSION   0x01
+
+#define FXS_MAJOR_VERSION 0x01	// current FXS version is 1.27.00
+#define FXS_MINOR_VERSION 0x1B	//
+#define FXS_REVISION_NMBR 0x00
  
 //////////////// BEGIN contributed code by avarvit
 // /* Temperature Mode */
@@ -66,7 +70,7 @@ typedef enum
     */
 
     // return svn revision (as a null-terminated string) 
-    GET_SVN_REVISION= 0x60,
+    GET_FXS_VERSION = 0x60,
     WRITE_SERIAL_NO = 0x61,
     REBOOT_BOOTLOAD = 0x62,
 

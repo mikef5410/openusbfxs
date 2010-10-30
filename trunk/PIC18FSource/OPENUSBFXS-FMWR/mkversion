@@ -1,0 +1,1 @@
+eval `(egrep '(FXS_MAJOR_VERSION|FXS_MINOR_VERSION|FXS_REVISION_NMBR)' user.h && echo 'printf "%d.%d.%d\n" FXS_MAJOR_VERSION FXS_MINOR_VERSION FXS_REVISION_NMBR') | /usr/bin/cpp -P` > firmware_version

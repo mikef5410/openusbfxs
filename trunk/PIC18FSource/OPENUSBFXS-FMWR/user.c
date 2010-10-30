@@ -405,16 +405,11 @@ void ServiceRequests(void) {
 		counter = 0x04;
 		break;
 
-	    case GET_SVN_REVISION:	// UNTESTED!! TESTME!!
-	        cp = (svnrevstr + 10);
-		while (*cp && (*cp < '0' || *cp > '9')) cp++;
-		bp = &INPacket._byte[2];
-		counter = 1; // at least the terminating \0
-		while (*cp && *cp >= '0' && *cp <= '9') {
-		    *bp++ = (BYTE) *cp++;
-		    if (bp - &INPacket._byte[0] >= sizeof (INPacket) - 1) break;
-		}
-		*bp = 0;
+	    case GET_FXS_VERSION:
+		INPacket._byte[2] = FXS_MAJOR_VERSION;
+		INPacket._byte[3] = FXS_MINOR_VERSION;
+		INPAcket._bute[4] = FXS_REVISION_NMBR;
+		counter = 0x05;
 		break;
 
 	    case WRITE_SERIAL_NO:
