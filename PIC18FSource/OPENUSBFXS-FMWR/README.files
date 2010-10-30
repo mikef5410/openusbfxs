@@ -16,6 +16,8 @@ usb_device.c.patch		Patch to Microchip USB stack file "usb_device.c"
 usbdevice.c.README		A note on the above patch file
 tmr1_isr.asm			TMR1 ISR and initialization code (assembly)
 tmr1_isr.h			Prototype definitions for "tmr1_isr.asm"
+eeprom.c			EEPROM-related functions
+eeprom.h			EEPROM-related prototype definitions
 
 
 
