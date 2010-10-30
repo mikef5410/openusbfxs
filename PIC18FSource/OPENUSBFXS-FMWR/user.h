@@ -32,10 +32,12 @@
 /* PICDEM FS USB Demo Version */
 #define MINOR_VERSION   0x00    //Demo Version 1.00
 #define MAJOR_VERSION   0x01
-
-/* Temperature Mode */
-#define TEMP_REAL_TIME  0x00
-#define TEMP_LOGGING    0x01
+ 
+//////////////// BEGIN contributed code by avarvit
+// /* Temperature Mode */
+// #define TEMP_REAL_TIME  0x00
+// #define TEMP_LOGGING    0x01
+//////////////// END contributed code by avarvit
 
 typedef enum
 {
@@ -66,6 +68,7 @@ typedef enum
     // return svn revision (as a null-terminated string) 
     GET_SVN_REVISION= 0x60,
     WRITE_SERIAL_NO = 0x61,
+    REBOOT_BOOTLOAD = 0x62,
 
     // set isochronous IO on/off
     START_STOP_ISOV2= 0x7d,	// v2 adds a sequence number for setting DRs
