@@ -1,7 +1,17 @@
-*** usb_device.c	Tue May  5 13:17:20 2009
---- usb_device.c.org	Fri Jun 19 08:07:59 2009
+*** usb_device.c	2010-05-31 17:07:55.915656400 +0300
+--- usb_device.c.org	2009-06-19 08:07:59.707400000 +0300
 ***************
-*** 370,376 ****
+*** 41,47 ****
+  #include "./USB/usb_device.h"
+  #include "HardwareProfile.h"
+  #include "usb_config.h"
+- #include "eeprom.h"		// avarvit
+  
+  #if defined(USB_USE_MSD)
+      #include "./USB/usb_function_msd.h"
+--- 41,46 ----
+***************
+*** 371,377 ****
       if(USBSOFIF && USBSOFIE)
       {
           USBCB_SOF_Handler();    // Required callback, see usbcallbacks.c
@@ -17,3 +27,36 @@
       }
   
       if(USBStallIF && USBStallIE)
+***************
+*** 1121,1142 ****
+                  inPipes[0].wCount.Val = *(inPipes[0].pSrc.wRom+1);                // Set data count
+                  break;
+              case USB_DESCRIPTOR_STRING:
+! 		if (SetupPkt.bDscIndex == 3) {	// serial no? get it from eeprom
+! 
+! 		    eeReadHex (
+! 		      EE_SERIAL_NO,
+! 		      (WORD *) (*(USB_SD_Ptr+SetupPkt.bDscIndex) + 2),
+! 		      EE_SERIAL_NO_LEN); // hex conversion -> twice the length
+! 
+! 		    // set inPipes[0] descriptors appropriately
+! 		    inPipes[0].pSrc.bRam = *(USB_SD_Ptr+SetupPkt.bDscIndex);
+! 		    inPipes[0].wCount.Val = *inPipes[0].pSrc.bRam; // data count
+! 		    inPipes[0].info.bits.ctrl_trf_mem = _RAM;	// RAM, not ROM
+! 		}
+! 		else {
+! 		    inPipes[0].pSrc.bRom = *(USB_SD_Ptr+SetupPkt.bDscIndex);
+! 		    inPipes[0].wCount.Val = *inPipes[0].pSrc.bRom;                    // Set data count
+! 		}
+                  break;
+              default:
+                  inPipes[0].info.Val = 0;
+--- 1120,1127 ----
+                  inPipes[0].wCount.Val = *(inPipes[0].pSrc.wRom+1);                // Set data count
+                  break;
+              case USB_DESCRIPTOR_STRING:
+!                 inPipes[0].pSrc.bRom = *(USB_SD_Ptr+SetupPkt.bDscIndex);
+!                 inPipes[0].wCount.Val = *inPipes[0].pSrc.bRom;                    // Set data count
+                  break;
+              default:
+                  inPipes[0].info.Val = 0;

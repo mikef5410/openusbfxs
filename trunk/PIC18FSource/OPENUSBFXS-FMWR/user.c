@@ -309,7 +309,7 @@ void ServiceRequests(void) {
     WORD indval;
     unsigned short i;			// general-purpose counter
     BYTE *bp;
-    char *cp;
+    rom char *cp;
     
     //Check to see if data has arrived
     if(!USBHandleBusy(USBGenericOutHandle)) {        
@@ -422,9 +422,14 @@ void ServiceRequests(void) {
 		// binary string; this is converted into hex when reported to
 		// the host during USB device enumeration
 	        eeWrite (EE_SERIAL_NO, &OUTPacket._byte[2], EE_SERIAL_NO_LEN);
-		eeRead (0, &INPacket._byte[2], EE_SERIAL_NO_LEN); // verify it
+		eeRead (EE_SERIAL_NO,
+		  &INPacket._byte[2], EE_SERIAL_NO_LEN); // verify it
 		counter = 2 + EE_SERIAL_NO_LEN;
 		break;
+
+	    case REBOOT_BOOTLOAD:
+	        eeWrite(EE_BOOTLOAD_FLAG, &OUTPacket.CMD, EE_BOOTLOAD_FLAG_LEN);
+		Reset();
 		
 
 	    case START_STOP_ISOV2:
@@ -477,6 +482,7 @@ void ServiceRequests(void) {
 
 
 		break;
+
 	    case SOF_PROFILE:
 		PIE1bits.TMR1IE = 0;	// temporarily disable TMR1 interrupts
 		for (i = 0; i < 65535; i++) ;       // wait for TIMR1 to expire

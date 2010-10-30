@@ -24,6 +24,7 @@
 #include "USB/usb_function_generic.h"
 #include "usb_config.h"
 #include "user.h"                              // Modifiable
+#include "eeprom.h"
 
 /** CONFIGURATION **************************************************/
 // Configuration bits for Open USB FXS board
@@ -136,7 +137,8 @@ extern void _startup (void);        // See c018i.c in your C18 compiler dir
 #pragma code REMAPPED_RESET_VECTOR = REMAPPED_RESET_VECTOR_ADDRESS
 void _reset (void)
 {
-    _asm goto _startup _endasm
+    // _asm goto _startup _endasm
+    _asm goto chk_mode _endasm
 }
 #endif
 
