@@ -454,6 +454,64 @@ static int start_stop_iov2 (struct oufxs_dahdi *dev, __u8 val)
     return 0;
 }
 
+
+/* query board's firmware version number (firmware must be >= svn rev 27) */
+static int get_fmwr_version (struct oufxs_dahdi *dev, unsigned long *version)
+{
+    union oufxs_packet req = GET_FXS_VERSION_REQ ();
+    union oufxs_packet rpl;
+    int rlngth;
+    int length;
+    int retval;
+
+    int outpipe = usb_sndbulkpipe (dev->udev, dev->ep_bulk_out);
+    int in_pipe = usb_rcvbulkpipe (dev->udev, dev->ep_bulk_in);
+
+    rlngth = sizeof(req.fxsvsn_req);
+    retval = usb_bulk_msg (dev->udev, outpipe, &req, rlngth, &length, 1000);
+    if (retval) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(out) returned %d", __func__, retval);
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+        return -EIO;
+    }
+
+    rlngth = sizeof(rpl.fxsvsn_rpl);
+    retval = usb_bulk_msg (dev->udev, in_pipe, &rpl, rlngth, &length, 1000);
+    if (retval) {
+	/* avoid issuing warnings on ETIMEDOUT; if board doesn't respond,
+	 * we 'll get to fill out message rings, syslog files, etc. without
+	 * any reason
+	 */
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(in) returned %d", __func__, retval);
+        return -EIO;
+    }
+    if (length != rlngth) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(in) read %d instead of %d bytes", __func__,
+	  length, rlngth);
+        return -EIO;
+    }
+
+    OUFXS_DEBUG (OUFXS_DBGTERSE,
+      "%s: board is running firmware version %d.%d.%d\n",
+      __func__, rpl.fxsvsn_rpl.maj,
+      rpl.fxsvsn_rpl.min, rpl.fxsvsn_rpl.rev);
+
+    *version =	((unsigned long) rpl.fxsvsn_rpl.maj) << 16 |
+		((unsigned long) rpl.fxsvsn_rpl.min) <<  8 |
+		((unsigned long) rpl.fxsvsn_rpl.rev);
+
+    return 0;
+}
+
+
 /* write serial number to the board's eeprom */
 static int burn_serial (struct oufxs_dahdi *dev, unsigned long serial)
 {
@@ -1510,6 +1568,7 @@ static void oufxs_setup (void *data)
 	  dev->udev->serial);
     }
 
+
     /* never proceed with normal board initialization unless in idle state */
     spin_lock_irqsave (&dev->statelck, flags);
     if (dev->state != OUFXS_STATE_IDLE) {
@@ -2204,6 +2263,8 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
     struct wctdm_stats stats;
     struct wctdm_regs regs;
     struct oufxs_dahdi *dev;
+    unsigned long version;
+    unsigned long serial;
     int i;
     int sts;
     __u8 drval;
@@ -2388,8 +2449,16 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 #endif
 
 
+      case OUFXS_IOCGVER:	/* get firmware version */
+        retval = get_fmwr_version (dev, &version);
+	if (retval == 0) {
+	    retval = __put_user (version, (int __user *) data);
+	}
+	break;
+
+
       case OUFXS_IOCBURNSN:	/* burn a serial number on EEPROM */
-	retval = burn_serial (dev, * ((unsigned long *)data));
+	retval = burn_serial (dev, *((unsigned long *)data));
 	break;
 
 
@@ -2397,6 +2466,11 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
         retval = reboot_bootload (dev);
 	break;
 
+
+      case OUFXS_IOCGSN:	/* get the current serial number */
+	sscanf (dev->udev->serial, "%lx", &serial);
+	retval = __put_user (serial, (int __user *) data);
+	break;
 
       default:
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: %d", __func__, cmd);
