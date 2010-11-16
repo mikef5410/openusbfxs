@@ -8,7 +8,7 @@ typedef unsigned char __u8;
 enum enum_oufxs_cmd {
     READ_VERSION	= 0x00,
 
-    GET_SVN_REVISION	= 0x60,		/* get the SVN revision number	*/
+    GET_FXS_VERSION	= 0x60,		/* get the FXS firmware version	*/
     WRITE_SERIAL_NO	= 0x61,		/* write serial # in eeprom	*/
     REBOOT_BOOTLOAD	= 0x62,		/* reboot in bootloader mode	*/
    	
@@ -41,12 +41,14 @@ union oufxs_packet {
     }		rdvrsn_rpl;
     struct {
         __u8	cmd;
-    }		svnrev_req;
+    }		fxsvsn_req;
     struct {
         __u8	cmd;
 	__u8	rsv;
-	char	str[6];
-    }		svnrev_rpl;
+	__u8	maj;
+	__u8	min;
+	__u8	rev;
+    }		fxsvsn_rpl;
     struct {
         __u8	cmd;
 	__u8	rsv;
@@ -88,8 +90,8 @@ union oufxs_packet {
     }		sofprof_rpl;
 };
 
-#define GET_SVN_REVISION_REQ()		\
-		{.svnrev_req={.cmd=GET_SVN_REVISION}}
+#define GET_FXS_VERSION_REQ()		\
+		{.fxsvsn_req={.cmd=GET_FXS_VERSION}}
 #define WRITE_SERIAL_NO_REQ(s3,s2,s1,s0) \
 		{.serial_req={.cmd=WRITE_SERIAL_NO, \
 		 .str[0]=s3,.str[1]=s2,.str[2]=s1,.str[3]=s0}}

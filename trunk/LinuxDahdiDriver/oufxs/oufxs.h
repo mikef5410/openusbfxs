@@ -44,13 +44,13 @@
 #define OUFXS_CHUNK_BITS	3
 #define OUFXS_CHUNK_SIZE	(1 << OUFXS_CHUNK_BITS)
 
-#ifdef __KERNEL__
-#include <linux/usb.h>
-#include <linux/ioctl.h>
-
 /* our vendor and product ids (note: sub-licensed from Microchip) */
 #define OUFXS_VENDOR_ID		0x04D8
 #define OUFXS_PRODUCT_ID	0xFCF1
+
+#ifdef __KERNEL__
+#include <linux/usb.h>
+#include <linux/ioctl.h>
 
 /* max # of boards supported per system */
 #define OUFXS_MAX_BOARDS	128
@@ -130,7 +130,12 @@ struct oufxs_stats {
 #define OUFXS_IOCGSTATS	_IOR(OUFXS_IOC_MAGIC, 6, struct oufxs_stats)
 /* burn a serial number */
 #define OUFXS_IOCBURNSN	_IO(OUFXS_IOC_MAGIC, 7)
+/* reboot in bootloader mode */
 #define OUFXS_IOCBOOTLOAD _IO(OUFXS_IOC_MAGIC, 8)
-#define OUFXS_MAX_IOCTL	8
+/* get the firmware version */
+#define OUFXS_IOCGVER	_IOR(OUFXS_IOC_MAGIC, 9, int)
+/* get the serial number */
+#define OUFXS_IOCGSN	_IOR(OUFXS_IOC_MAGIC, 10, int)
+#define OUFXS_MAX_IOCTL	10
 
 #endif /* OUFXS_H */
