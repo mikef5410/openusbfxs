@@ -9,6 +9,9 @@
 #include <usb.h>	/* this is libusb's include file */
 
 static char *me;	/* my own name */
+static char opt_n = 0;	/* don't program the flash, show what would be done */
+static char opt_v = 0;	/* be verbose */
+static char opt_f = 0;	/* re-flash even if new image is identical to flash */
 
 /* parts copied shamelessly from fsusb file rjlhex.h */
 
@@ -586,8 +589,8 @@ mi_image *mi_load_hexfile (char *filename) {
 	return NULL;
     }
 
-    /* These nulls may not be required, but make me feel safer when
-     *  using free_image() on an error
+    /* These nulls may not be required, but make me [av: this is the original
+     * author of the code] feel safer when  using free_image() on an error
      */
     img->program = NULL;
     img->id = NULL;
@@ -631,36 +634,56 @@ mi_image *mi_load_hexfile (char *filename) {
 	     */
 
 	    if (r->addr >= MI_PROGRAM_BASE && r->addr <  MI_BTLDPGM_BASE) {
-	        fprintf (stderr,
-		  "mi_load_hexfile(): "
-		  "\"%s\", line %d: low-mem data @%04X ignored\n",
-		  filename, hfline, r->addr);
+		if (opt_v) {
+		    fprintf (stderr,
+		      "mi_load_hexfile(): "
+		      "\"%s\", line %d: low-mem data @%04X ignored\n",
+		      filename, hfline, r->addr);
+		}
 	    }
 
+	    /* program memory */
 	    if (r->addr >= MI_BTLDPGM_BASE && r->addr <= MI_PROGRAM_TOP) {
-		//        printf("Program memory\n");
 		mi_modify_patch (img->program, r->addr, r->datlen, r->data);
 	    }
 
+	    /* id memory */
 	    if (r->addr >= MI_ID_BASE && r->addr <= MI_ID_TOP) {
-		//        printf("ID memory\n");
+		if (opt_v) {
+		    fprintf (stderr,
+		      "mi_load_hexfile(): "
+		      "\"%s\", line %d: id-mem data @%06X ignored\n",
+		      filename, hfline, r->addr);
+		}
+		/*
 		mi_modify_patch(img->id, r->addr, r->datlen, r->data);
+		*/
 	    }
 
+	    /* config memory */
 	    if (r->addr >= MI_CONFIG_BASE && r->addr <= MI_CONFIG_TOP) {
-	        fprintf (stderr,
-		  "mi_load_hexfile(): "
-		  "\"%s\", line %d: cfg data @%06X ignored\n",
-		  filename, hfline, r->addr);
-		//        printf("Config memory\n");
+		if (opt_v) {
+		    fprintf (stderr,
+		      "mi_load_hexfile(): "
+		      "\"%s\", line %d: cfg data @%06X ignored\n",
+		      filename, hfline, r->addr);
+		}
 		/*
 		mi_modify_patch(img->config, r->addr, r->datlen, r->data);
 		*/
 	    }
 
+	    /* devid memory */
 	    if (r->addr >= MI_DEVID_BASE && r->addr <= MI_DEVID_TOP) {
-		//        printf("Devid memory\n");
+		if (opt_v) {
+		    fprintf (stderr,
+		      "mi_load_hexfile(): "
+		      "\"%s\", line %d: devid-mem data @%06X ignored\n",
+		      filename, hfline, r->addr);
+		}
+		/*
 		mi_modify_patch(img->devid, r->addr, r->datlen, r->data);
+		*/
 	    }
 	}
 	free(r);
@@ -818,53 +841,6 @@ int read_flash (picdem_handle *udev, int offset, int len, bl_packet *rpack) {
 }
 
 
-#if 0 /* shoot... that's dead code in fsusb.c... only write_block() is called */
-/* write a block of bytes to the board's flash memory
- * (caveat: block size must be always 16)
- */
-int write_flash (picdem_handle *udev, int offset, int len, byte *data) {
-    bl_packet spack;
-    int i;
-    byte ret;
-
-    /* the bootloader can only write program data as 16-byte-aligned,
-     * 16-byte chunks; if we get a chunk which is not aligned at a
-     * 16-byte boundary or is not 16-byte long, we refuse to write it
-     */
-    if (offset & 0x0f) {
-        fprintf (stderr, "write_flash(): offset %06x is not 16-byte aligned\n",
-	  offset);
-	return 0;
-    }
-    if (len != 16) { /* why on earth did then rjl make 'len' a variable? -av */
-        fprintf (stderr, "write_flash(): length %d must be 16 bytes\n", len);
-	return 0;
-    }
-
-    spack.command = WRITE_FLASH;
-    spack.address.low   = (offset & 0x0000ff) >>  0;
-    spack.address.high  = (offset & 0x00ff00) >>  8;
-    spack.address.upper = (offset & 0x0f0000) >> 16;
-    spack.len = len;
-    for (i = 0; i < len; i++) {
-        spack.data [i] = data [i];
-    }
-
-    if (!usb_send (udev, &spack._byte[0], 5 + len)) {
-        return 0;
-    }
-    /* note: I have not managed to find a specific success/failure code
-     * being returned by the bootloader code; it seems that a single-byte
-     * reply is just returned anyway and irrespectively of this byte's
-     * contents, this is to be taken as a success
-     */
-    if (!usb_recv (udev, &ret, 1)) {
-        return 0;
-    }
-    return 1;
-}
-#endif
-
 /* first erase, then write a 64-byte block of (64-byte-aligned) data into the
  * board's flash memory at offset 'offset' (64-byte boundaries are needed
  * because of the way the flash can be erased -- as 64-byte blocks)
@@ -872,7 +848,7 @@ int write_flash (picdem_handle *udev, int offset, int len, byte *data) {
 int write_block (picdem_handle *udev, int offset, byte *data) {
     bl_packet spack;
     byte ret;
-    int subblock = 0;
+    unsigned int subblock = 0;
 
     if (offset & 0x3f) {
         fprintf (stderr, "write_block(): offset %06x is not 64-byte aligned\n",
@@ -880,6 +856,7 @@ int write_block (picdem_handle *udev, int offset, byte *data) {
 	return 0;
     }
 
+    /* the ERASE_FLASH operation erases a 64-byte block */
     spack.command = ERASE_FLASH;
     spack.address.low   = (offset & 0x0000ff) >>  0;
     spack.address.high  = (offset & 0x00ff00) >>  8;
@@ -896,19 +873,32 @@ int write_block (picdem_handle *udev, int offset, byte *data) {
 
     /* flash can be written in 16-byte, 16-byte-aligned chunks only */
     for (subblock = 0; subblock < 4; subblock++) {
+
+	/*
+	int i;
+	char buf [33];
+	for (i = 0; i < 16; i++) {
+	    sprintf (&buf[2*i],
+	      "%02x", (unsigned int) *(data + (subblock << 4) + i));
+	}
+	fprintf (stderr, "write_block: @%06X: %s\n",
+	  (offset + (subblock << 4)), buf);
+	*/
+
 	spack.command = WRITE_FLASH;
-	spack.address.low   = (offset & 0x0000ff) >>  0;
-	spack.address.high  = (offset & 0x00ff00) >>  8;
-	spack.address.upper = (offset & 0x0f0000) >> 16;
+	spack.address.low   = ((offset + (subblock << 4)) & 0x0000ff) >>  0;
+	spack.address.high  = ((offset + (subblock << 4)) & 0x00ff00) >>  8;
+	spack.address.upper = ((offset + (subblock << 4)) & 0x0f0000) >> 16;
 	spack.len = 16;
 	memcpy (spack.data, data + (subblock << 4), 16);
-    }
-    if (!usb_send (udev, &spack._byte[0], 5 + 16)) {
-        return 0;
-    }
-    /* see note in write_flash() above about the returned byte's contents */
-    if (!usb_recv (udev, &ret, 1)) {
-        return 0;
+
+	if (!usb_send (udev, &spack._byte[0], 5 + 16)) {
+	    return 0;
+	}
+	/* see note in write_flash() above about the returned byte's contents */
+	if (!usb_recv (udev, &ret, 1)) {
+	    return 0;
+	}
     }
     return 1;
 }
@@ -986,6 +976,9 @@ int program_flash (picdem_handle *udev, int addr, int len, mi_byte_t *data, char
 	  len);
 	return 0;
     }
+    if (opt_n) {
+        return 0;
+    }
     if (!write_block (udev, addr, data)) {
         return 0;
     }
@@ -1001,7 +994,13 @@ int program_flash (picdem_handle *udev, int addr, int len, mi_byte_t *data, char
 static char path[128];
 
 static void usage() {
-    fprintf (stderr, "usage: %s [-n] <hexfile> <version>\n", me);
+    fprintf (stderr, "usage: %s [-v][-n|-f] <hexfile> <version>\n", me);
+    fprintf (stderr, "       -v: produce verbose output\n");
+    fprintf (stderr,
+      "       -n: do not write flash; show what would be done\n");
+    fprintf (stderr, "       -f: program flash even if hex img is identical\n");
+    fprintf (stderr, "           (without -f, flash is not re-programmed if\n");
+    fprintf (stderr, "           it is found to be identical to hex image)\n");
 }
 
 static void version_usage () {
@@ -1087,7 +1086,7 @@ static int upgrade (int fd, unsigned long serial, mi_image *img) {
     }
 
     fprintf (stderr,
-      "  %s: found board on bus/dev %s/%s, serial %8lX, invoking bootloader\n",
+      "  %s: found board on bus/dev %s/%s, s/n %8lX; invoking bootloader\n",
       me, bus->dirname, dev->filename, ser);
 
     if (ioctl (fd, OUFXS_IOCBOOTLOAD) < 0) {
@@ -1166,37 +1165,51 @@ static int upgrade (int fd, unsigned long serial, mi_image *img) {
     /* choose configuration #1 */
     if (usb_set_configuration (udev, 1)) {
         fprintf (stderr,
-	  "%s: usb_set_configuration() to 1 failed\n", me);
+	  "%s: usb_set_configuration() to 1 failed for bootloader\n", me);
 	goto failed;
     }
 
     if (!request_version (udev, buf)) {
-	/* no error is necessary, request_version() will print one for us */
+	/* no error is necessary, request_version() has printed one for us */
         goto failed;
     }
 
     if (buf [0] != 0x01u) {
-        fprintf (stderr, "%s: unexpected version %u\n", me, buf[0]);
+        fprintf (stderr, "%s: unexpected bootloader major version %u\n",
+	  me, buf[0]);
+        fprintf (stderr, "%s: leaving board in bootloader mode\n", me);
 	goto failed;
     }
 
-    /* FIXME: uncomment this block of code
 
     if (mi_scan (udev, img->program, verify_flash)) {
-        fprintf (stderr,
-	  "%s: on-board flash is identical to hex file; resetting board...\n",
-	  me);
+	if (opt_f) {
+	    fprintf (stderr,
+	     "  on-board flash is identical to hex file "
+	     "(but reflashing anyway since -f given)\n");
+	}
+	else {
+	    fprintf (stderr,
+	     "  on-board flash is identical to hex file; "
+	     "resetting board without flashing...\n");
+	    reset_bootloader (udev);
+	    goto failed;
+	}
+    }
+
+    if (!mi_scan (udev, img->program, program_flash)) {
+	if (opt_n) {
+	    fprintf (stderr,
+	      "  did not write flash (-n given); resetting board...\n");
+	}
+	else {
+	    fprintf (stderr,
+	      "%s: program flash failed; resetting board...\n", me);
+	}
 	reset_bootloader (udev);
 	goto failed;
     }
-    */
 
-    if (!mi_scan (udev, img->program, program_flash)) {
-        fprintf (stderr,
-	  "%s: program flash failed; resetting board...\n", me);
-	reset_bootloader (udev);
-	return 0;
-    }
     fprintf (stderr, "  %s: board's flash programmed, verifying...\n", me);
     if (!mi_scan (udev, img->program, verify_flash)) {
         fprintf (stderr,
@@ -1209,17 +1222,6 @@ static int upgrade (int fd, unsigned long serial, mi_image *img) {
     usb_close (udev);
 
     return 1;
-
-    /*
-    HEREHERE: add the mi_scan() function and missing functions from
-    fsusb.c; 
-    code should:
-      verify existing flash; OK
-      if ==, return 1 OK
-      write flash
-      re-verify and return accordingly 1 or 0
-    */
-    
 
   failed:
     if (udev) {
@@ -1235,7 +1237,6 @@ int main (int argc, char **argv)
     int oufxscount = 0;
     int fmwrtooold = 0;
     int upgraded = 0;
-    char opt_n = 0;
     unsigned long serial;
     unsigned long version;
     mi_image *img = NULL;
@@ -1246,26 +1247,49 @@ int main (int argc, char **argv)
     me = strrchr (argv[0], '/');
     me = me? me + 1 : argv[0];
 
-    if (setenv ("USB_DEBUG", "1", 1) < 0) {
-        perror ("setenv failed");
-    }
-    usb_init ();
-    /* assuming busses won't change throughout the program's lifetime,
-     * calling usb_find_busses() just once here should be OK; in contrast,
-     * usb_find_devices() is caled every time, to sync with board
-     * reboots and personality changes;
-     */
-    usb_find_busses ();
-
     if (argc < 3) {
         usage ();
 	exit (1);
     }
 
-    if (!strcmp (argv[1], "-n")) {
-        opt_n = 1;
-	argv++;
+    if (argv[1][0] == '-') {
+	switch (argv[1][1]) {
+	  case 'n':
+	    if (opt_f) {
+		fprintf (stderr,
+		  "%s: options -n and -f are mutually exclusive\n",
+		  me);
+		usage ();
+		exit (1);
+	    }
+	    opt_n = 1;
+	    argv++;
+	    break;
+
+	  case 'v':
+	    opt_v = 1;
+	    argv++;
+	    break;
+
+	  case 'f':
+	    if (opt_n) {
+		fprintf (stderr,
+		  "%s: options -n and -f are mutually exclusive\n",
+		  me);
+		usage ();
+		exit (1);
+	    }
+	    opt_f = 1;
+	    argv++;
+	    break;
+
+	  default:
+	    fprintf (stderr, "%s: unknown option %s\n", me, argv[1]);
+	    usage();
+	    exit (1);
+	}
     }
+    
 
     if ((img = mi_load_hexfile (argv [1])) == NULL) {
 	exit (1);
@@ -1282,11 +1306,32 @@ int main (int argc, char **argv)
     fprintf (stderr, "%s: upgrading oufxs devices to version %d.%d.%d\n",
       me, maj, min, rev);
 
+    if (opt_v) {
+	if (setenv ("USB_DEBUG", "1", 1) < 0) {
+	    perror ("setenv failed");
+	}
+    }
+    usb_init ();
+    /* assuming busses won't change throughout the program's lifetime,
+     * calling usb_find_busses() just once here should be OK; in contrast,
+     * usb_find_devices() is caled every time, to sync with board
+     * reboots and personality changes;
+     */
+    usb_find_busses ();
+
+
     /* loop over all dahdi channels in the system */
     for (i = 1; ; i++) {
         snprintf (path, 64, "/dev/dahdi/%d", i);
+
+	fprintf (stderr, "  trying %s\n", path);
 	if ((fd = open (path, O_RDWR)) < 0) {
 	    switch (errno) {
+	      /* caveat: the following code just exits if the next /dev/dahdi/N
+	       * fails with ENOENT; however, if e.g. /dev/dahdi/1 has been
+	       * removed from the system while /dev/dahdi/2 is still active,
+	       * this may not be what we wanted;
+	       */
 	      case ENOENT:
 	        fprintf (stderr,
 		  "%s: %d dahdi devices, %d oufxs boards, "
@@ -1320,6 +1365,7 @@ int main (int argc, char **argv)
 	    }
 	    goto next_dahdi_dev;
 	}
+
 	/* try to get the board's serial number [note: the magic number
 	 * used by oufxs ioctls is not normally used by dahdi devices,
 	 * so it is relatively safe to issue a OUFXS_IOCGSN (get serial
@@ -1327,8 +1373,8 @@ int main (int argc, char **argv)
 	 * an unimplemented ioctl (ENOTTY) error cannot really be used
 	 * to tell apart a oufxs device running older firmware from
 	 * other devices; luckily, both cases (older oufxs devices and
-	 * other devices) are to be handled alike, in that they cannot
-	 * be flashed automagically by this program]
+	 * other devices) are to be handled alike, in that older oufxs
+	 * boards cannot be flashed automagically by this program]
 	 */
 	if (ioctl (fd, OUFXS_IOCGSN, &serial) < 0) {
 	    if (errno == ENOTTY) {
@@ -1354,7 +1400,7 @@ int main (int argc, char **argv)
 		goto next_dahdi_dev;
 	    }
 	}
-	fprintf (stderr, "  (found serial %08lX)\n", serial);
+	fprintf (stderr, "  found serial %08lX\n", serial);
 	
 	if (ioctl (fd, OUFXS_IOCGVER, &version) < 0) {
 	    fprintf (stderr,
@@ -1369,7 +1415,7 @@ int main (int argc, char **argv)
 	if (maj > bmj ||
 	  (maj == bmj && min > bmn) ||
 	  (maj == bmj && min == bmn && rev > brv)) {
-	    if (upgrade (fd, serial, img) == 0) {
+	    if (upgrade (fd, serial, img) == 1) {
 		upgraded++;
 	    }
 	}
