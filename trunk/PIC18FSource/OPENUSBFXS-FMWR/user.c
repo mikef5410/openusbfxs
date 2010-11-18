@@ -408,7 +408,7 @@ void ServiceRequests(void) {
 	    case GET_FXS_VERSION:
 		INPacket._byte[2] = FXS_MAJOR_VERSION;
 		INPacket._byte[3] = FXS_MINOR_VERSION;
-		INPAcket._bute[4] = FXS_REVISION_NMBR;
+		INPacket._byte[4] = FXS_REVISION_NMBR;
 		counter = 0x05;
 		break;
 
