@@ -48,6 +48,8 @@ typedef struct _hex_file {
     unsigned long addr;
 } hex_file;
 
+static void usage(void);
+static void version_usage(void);
 hex_file *hex_open(FILE *f);	  /* create hex_file from already-open FILE * */
 hex_record *hex_read(hex_file *, char *); /* read the next hex_record from f  */
 
