@@ -254,10 +254,9 @@ struct oufxs_dahdi {
     volatile char		*writechunk;
 };
 
-struct sn_to_span {
+struct sn_to_chan {
     char serial[10];
     int  channo;
-    struct dahdi_span *span;
 };
 
 
@@ -310,7 +309,8 @@ static struct oufxs_dahdi *boards[OUFXS_MAX_BOARDS];	/* active dev structs */
 /* lock to be held while manipulating boards */
 static spinlock_t boardslock;	/* lock while manipulating boards 	*/
 /* dummy spans/channels used for reserving channel numbers to specific boards */
-static struct sn_to_span  *rsvsn2span = NULL;
+static struct sn_to_chan  *rsvsn2chan = NULL;
+static int numsn2chan = 0;
 static int numdummies = 0;
 
 /* tables etc. */
@@ -346,7 +346,7 @@ static int start_stop_iov2 (struct oufxs_dahdi *, __u8);
 static int read_direct (struct oufxs_dahdi *, __u8, __u8 *);
 static int write_direct (struct oufxs_dahdi *, __u8, __u8, __u8 *);
 static int sof_profile (struct oufxs_dahdi *);
-static int process_rsvserials (void);
+static int oufxs_open_dummy (struct dahdi_chan *);
 
 /* macros and functions for manipulating and printing Si3210 register values */
 
@@ -882,22 +882,6 @@ static int is_valid_indirect_register (const __u8 b)
     if (b >= 99 && b <= 104) return true;
     return false;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 static int sof_profile (struct oufxs_dahdi *dev)
 {
@@ -1463,8 +1447,26 @@ static void oufxs_delete (struct kref *kr)
         OUFXS_WARN ("%s: called with opencnt non-zero!", __func__);
     }
 
-    /* we are not expecting anything from dahdi, so unregister our span */
-    dahdi_unregister (&dev->span);
+    if (!dev->rsrvd) {
+	/* we are not expecting anything from dahdi, so unregister our span */
+	dahdi_unregister (&dev->span);
+    }
+    else {
+	OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
+	  "%s: preserving reserved channel %d for serial %s",
+	  __func__, rsvsn2chan[dev->slot].channo, rsvsn2chan[dev->slot].serial);
+	/* hopefully the channel lock is still held by the caller, so
+	 * open does not risk getting called while we change its hook
+	 * right below
+	 */
+        dev->span.open = oufxs_open_dummy;
+	safeprintf (dev->span.name, "OUFXS/rsrvd%d",
+	  rsvsn2chan[dev->slot].channo);
+	safeprintf (dev->span.desc, "Open USB FXS reserved for %s",
+	  rsvsn2chan[dev->slot].serial);
+	safeprintf (dev->span.location, "Not present (reserved)");
+    }
+
 
     /* destroy board initialization thread workqueue, killing worker thread */
     if (dev->iniwq) {
@@ -1501,19 +1503,30 @@ static void oufxs_delete (struct kref *kr)
     }
     dev->udev = NULL;
 
-    /* clear slot in boards[] */
-    spin_lock_irqsave (&boardslock, flags);
-    boards[dev->slot] = NULL;
-    spin_unlock_irqrestore (&boardslock, flags);
+    if (!dev->rsrvd) {
+	/* clear slot in boards[] */
+	spin_lock_irqsave (&boardslock, flags);
+	boards[dev->slot] = NULL;
+	spin_unlock_irqrestore (&boardslock, flags);
 
-    /* kfree various stuff in dev */
-    if (dev->chans[0]) kfree (dev->chans[0]);
+	/* kfree various stuff in dev */
+	if (dev->chans[0]) kfree (dev->chans[0]);
 
-    /* just a note to myself: each time I read this code I 'd better recheck
-     * to make sure that EVERYTHING in dev-> has been kfree()d
-     */
+	/* just a note to myself: each time I read this code I 'd better recheck
+	 * to make sure that EVERYTHING in dev-> has been kfree()d
+	 */
 
-    kfree (dev);
+	kfree (dev);
+    }
+    else {
+	spin_lock_irqsave (&dev->statelck, flags);
+	dev->state = OUFXS_STATE_IDLE;
+	spin_unlock_irqrestore (&dev->statelck, flags);
+	// FIXME: set endpoints to zero to avoid warnings on re-plug
+        /* do nothing else? */
+	OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: keeping dev for rsrvd serial %s",
+	  __func__, rsvsn2chan[dev->slot].serial);
+    }
 
     OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: finished", __func__);
 }
@@ -2536,43 +2549,84 @@ ioctl_io_error:
 static int oufxs_probe (struct usb_interface *intf,
   const struct usb_device_id *id)
 {
-    struct oufxs_dahdi *dev;
+    struct oufxs_dahdi *dev = NULL;
     struct usb_host_interface *intf_desc;
     struct usb_endpoint_descriptor *epd;
     size_t usbpcksize;
     char wqname[40];
     struct urb *urb;
     int retval = -ENODEV;
-    int slot;
+    int slot = -1;
     int i, j;
-    unsigned long flags;
+    unsigned long flags = 0; /* to avoid a phony compiler warning */
     union oufxs_data *p;
     __u8 *pcm_silence;
 
-    /* lock boards and search for an empty slot */
-    spin_lock_irqsave (&boardslock, flags);	/* are usb probe()s atomic? */
-    for (slot = 0; slot < OUFXS_MAX_BOARDS; slot++) {
-        if (!boards[slot]) break;
+    /* if we have reserved serial #'s, first look there */
+    if (rsvsn2chan) {
+        struct usb_device *udev = interface_to_usbdev (intf);
+	for (i = 0; i < numsn2chan; i++) {
+	    if (!strcmp (udev->serial, rsvsn2chan[i].serial)) { /* found it */
+		OUFXS_INFO ("channel %d pre-reserved for serial %s",
+		  rsvsn2chan[i].channo, udev->serial);
+	        slot = i;
+		dev = boards[slot];
+		/* BUG_ON (dev == NULL); */
+		if (!dev) {
+		    OUFXS_ERR ("boards[%d]=%lx", slot,
+		      (unsigned long)boards[slot]);
+		    return -EIO;
+		}
+		/* keep a perverted situation where two boards with the same
+		 * serial are plugged in from causing havoc
+		 */
+		if (dev->udev) { /* do we already have a USB device there? */
+		    OUFXS_ERR ("(!) duplicate serial %s ignored",
+		      udev->serial);
+		    retval = -EEXIST;
+		    // TODO: check if returning -EEXIST conforms to etiquette
+		    goto probe_error;
+		}
+		break;
+	    }
+	    else {
+	        OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "Board's serial %s != %s",
+		  udev->serial, rsvsn2chan[i].serial);
+	    }
+	}
     }
-    if (slot == OUFXS_MAX_BOARDS) {
-        OUFXS_WARN ("too many Open USB FXS boards!");
-	spin_unlock_irqrestore (&boardslock, flags);
-	return (-EIO);
-    }
-    /* mark slot as being used so other device instances won't touch
-     * it and release lock before kzalloc; kzalloc may sleep, and holding a spinlock while sleeping is a bad idea
-     */
-    boards[slot] = (struct oufxs_dahdi *) 1;
-    spin_unlock_irqrestore (&boardslock, flags);
 
-    /* allocate a new struct oufxs_dahdi and point current boards slot to it */
-    dev = kzalloc (sizeof (*dev), GFP_KERNEL);	/* we may be put to sleep */
-    if (!dev) {
-        OUFXS_ERR ("out of memory while allocating device state");
-	goto probe_error;
+    /* if not a reserved serial #, look for an empty slot */
+    if (slot == -1) {
+	/* lock boards and search for an empty slot */
+	spin_lock_irqsave (&boardslock, flags);	/* are usb probe()s atomic? */
+	for (slot = 0; slot < OUFXS_MAX_BOARDS; slot++) {
+	    if (!boards[slot]) break;
+	}
+	if (slot == OUFXS_MAX_BOARDS) {
+	    OUFXS_WARN ("too many Open USB FXS boards!");
+	    spin_unlock_irqrestore (&boardslock, flags);
+	    retval = -EIO;
+	    goto probe_error;
+	}
+	/* mark slot as being used (by setting it to 1) so other device
+	 * instances won't touch it; then, release lock before kzalloc:
+	 * kzalloc may sleep, and holding a spinlock while sleeping is
+	 * a bad idea
+	 */
+	boards[slot] = (struct oufxs_dahdi *) 1;
+	spin_unlock_irqrestore (&boardslock, flags);
+
+	/* allocate a new struct oufxs_dahdi and point current slot to it */
+	dev = kzalloc (sizeof (*dev), GFP_KERNEL); /* we may be put to sleep */
+	if (!dev) {
+	    OUFXS_ERR ("out of memory while allocating device state");
+	    retval = -ENOMEM;
+	    goto probe_error;
+	}
+	boards[slot] = dev;
+	dev->slot = slot;
     }
-    boards[slot] = dev;
-    dev->slot = slot;
 
     /* initialize device kernel ref count */
     kref_init (&dev->kref);
@@ -2586,6 +2640,7 @@ static int oufxs_probe (struct usb_interface *intf,
     /* initialize wait queues */
 
     /* initialize board's state variable */
+    dev->state = OUFXS_STATE_IDLE;
 
     /* initialize usb stuff */
     // TODO: remove/bypass urb anchoring for kernels earlier than 2.6.23
@@ -2638,6 +2693,7 @@ static int oufxs_probe (struct usb_interface *intf,
 	    if (usbpcksize != sizeof (union oufxs_data)) {
 	        OUFXS_ERR ("unexpected max packet size %ld in isoc-in ep",
 		  (long) usbpcksize);
+		retval = -EIO;
 		goto probe_error;
 	    }
 	    dev->ep_isoc_in = epd->bEndpointAddress;
@@ -2651,6 +2707,7 @@ static int oufxs_probe (struct usb_interface *intf,
 	    if (usbpcksize != sizeof (union oufxs_data)) {
 	        OUFXS_ERR ("unexpected max packet size %ld in isoc-out ep",
 		  (long) usbpcksize);
+		retval = -EIO;
 		goto probe_error;
 	    }
 	    dev->ep_isoc_out = epd->bEndpointAddress;
@@ -2669,6 +2726,7 @@ static int oufxs_probe (struct usb_interface *intf,
     if (!(dev->ep_bulk_in && dev->ep_bulk_out &&
       dev->ep_isoc_in && dev->ep_isoc_out )) {
         OUFXS_ERR ("board does not support all required bulk/isoc/int EPs??");
+	retval = -EIO;
 	goto probe_error;
     }
 
@@ -2824,7 +2882,16 @@ static int oufxs_probe (struct usb_interface *intf,
     	dev->span.deflaw = DAHDI_LAW_MULAW;
     }
     /* channel initilization */
-    dev->chans[0] = kzalloc (sizeof(struct dahdi_chan), GFP_KERNEL);
+    if (!dev->rsrvd) { /* channels of reserved boards are pre-allocated */
+	dev->chans[0] = kzalloc (sizeof(struct dahdi_chan), GFP_KERNEL);
+    }
+    else {
+        /* we have a pre-allocated channel which is registered with dahdi,
+	 * and we are about to fiddle with various things concerning it,
+	 * so it's best to lock it in order to avoid race conditions
+	 */
+        spin_lock_irqsave (&dev->chans[0]->lock, flags);
+    }
     safeprintf (dev->chans[0]->name, "OUFXS/%d", slot + 1);
     dev->chans[0]->sigcap =
       DAHDI_SIG_FXOKS	| DAHDI_SIG_FXOLS	| DAHDI_SIG_FXOGS 	|
@@ -2837,19 +2904,32 @@ static int oufxs_probe (struct usb_interface *intf,
      * core (as we did in the original "openusbfxs" driver), at this point
      * we are registering our device with dahdi-base
      */
+    /* note: for pre-allocated channels, we are just changing the hooks
+     * with the channel lock held; supposedly this is safe enough...
+     */
     dev->span.chans = dev->chans;
     dev->span.channels = 1;
     dev->span.hooksig = oufxs_hooksig;
     dev->span.open = oufxs_open;
     dev->span.close = oufxs_close;
-    dev->span.flags = DAHDI_FLAG_RBS;	/* robbed bit signaling(dahdi-default)*/
+    if (!dev->rsrvd) { /* pre-rsrvd chans already have this (and others!) set */
+	/* specify robbed bit signaling (dahdi-default) */
+	dev->span.flags = DAHDI_FLAG_RBS;
+    }
     dev->span.ioctl = oufxs_ioctl;
     // can do without it? dev->span.watchdog = oufxs_watchdog;
-    init_waitqueue_head (&dev->span.maintq);
-    retval = dahdi_register (&dev->span, 0);
-    if (retval) {
-        OUFXS_ERR ("unable to register span with dahdi");
-	goto probe_error;
+
+    if (!dev->rsrvd) {
+	init_waitqueue_head (&dev->span.maintq);
+	retval = dahdi_register (&dev->span, 0);
+	if (retval) {
+	    OUFXS_ERR ("unable to register span with dahdi");
+	    goto probe_error;
+	}
+    }
+    else { /* pre-allocated channels are also pre-registered, so no need to
+            * register them (however they are locked, so unlock them) */
+        spin_unlock_irqrestore (&dev->chans[0]->lock, flags);
     }
 
     /* create a unique name for our workqueue, then create the queue itself */
@@ -2893,8 +2973,16 @@ probe_error:
        kref_put (&dev->kref, oufxs_delete);
     }
 
-    /* reset current slot (needed here as well, if we set it to 1 before) */
-    boards[slot] = NULL;	/* no locking; if race occurs it's not serious*/
+    /* reset current slot (this is normally done by oufxs_delete right above,
+     * but it's needed here as well, in case we had set dev to 1 before
+     * calling kzalloc() and kzalloc failed)
+     */
+    if (boards[slot] && boards[slot] == (struct oufxs_dahdi *)1) {
+	/* we don't do locking here; even if a race occurs, the result
+	 * will be to just skip this slot, which not too serious
+	 */
+	boards[slot] = NULL;
+    }
     return retval;
 }
 
@@ -2931,13 +3019,13 @@ static void oufxs_disconnect (struct usb_interface *intf)
     OUFXS_INFO ("oufxs device %d is now disconnected", slot + 1);
 }
 
-static int process_rsvserials () {
+static int process_rsvserials(void) {
 
     char *p1, *p2, *p3, saved;
-    int  i, j, howmany = 1;
+    int  i, j;
     unsigned long flags;
     struct oufxs_dahdi *dev;
-    int chexpidx, retval = 0;
+    int retval = 0;
     struct dahdi_chan  **dummychps = NULL;
     struct dahdi_chan  *dummychans = NULL;
     struct dahdi_span  *dummyspans = NULL;
@@ -2945,24 +3033,27 @@ static int process_rsvserials () {
     /* we 're doing fine if no reservations were requested */
     if (!*rsvserials) return 0;
 
+    /* now we now we ought to have at least one */
+    numsn2chan = 1;
+
     /* process channel-to-serial# reservations */
 
     /* count mappings */
     for (p1 = rsvserials; *p1; p1++) {
-	if (*p1 == ',') howmany++;
+	if (*p1 == ',') numsn2chan++;
     }
 
-    if (howmany > OUFXS_MAX_BOARDS) {
+    if (numsn2chan > OUFXS_MAX_BOARDS) {
         OUFXS_ERR ("%d channel reservations is too much, can handle up to %d",
-	  howmany, OUFXS_MAX_BOARDS);
+	  numsn2chan, OUFXS_MAX_BOARDS);
 	retval = -EINVAL;
 	goto rsv_finish;
     }
 
     /* allocate mapping struct array */
-    rsvsn2span = (struct sn_to_span *)
-      kzalloc (howmany * sizeof(struct sn_to_span), GFP_KERNEL);
-    if (rsvsn2span == NULL) {
+    rsvsn2chan = (struct sn_to_chan *)
+      kzalloc (numsn2chan * sizeof(struct sn_to_chan), GFP_KERNEL);
+    if (rsvsn2chan == NULL) {
 	retval = -ENOMEM;
 	goto rsv_finish;
     }
@@ -2973,7 +3064,7 @@ static int process_rsvserials () {
 	/* parse string expecting an eight-digit hex number */
 
 	/* make sure they are hex digits */
-	for (p2 = p1, p3 = &rsvsn2span[i].serial[0];
+	for (p2 = p1, p3 = &rsvsn2chan[i].serial[0];
 	  p2 < (p1 + 8) && *p2;
 	  p2++, p3++) {
 	    if (!isxdigit (*p2)) {
@@ -2982,7 +3073,7 @@ static int process_rsvserials () {
 		retval = -EINVAL;
 		goto rsv_finish;
 	    }
-	    *p3 = *p2; /* copy to rsvsn2span[i].serial[] */
+	    *p3 = *p2; /* copy to rsvsn2chan[i].serial[] */
 	}
 	/* make sure we saw eight of them */
 	if (p2 != p1 + 8) {
@@ -3023,9 +3114,9 @@ static int process_rsvserials () {
 	/* save delimiter, read in the number & note highest chan so far */
 	saved = *p3;
 	*p3 = '\0';
-	sscanf (p2, "%d", &rsvsn2span[i].channo);
+	sscanf (p2, "%d", &rsvsn2chan[i].channo);
 	/* do some elementary sanity check */
-	if (rsvsn2span[i].channo <= 0 || rsvsn2span[i].channo >= MAX_DUMMYCHANS)
+	if (rsvsn2chan[i].channo <= 0 || rsvsn2chan[i].channo >= MAX_DUMMYCHANS)
 	{
 	    OUFXS_ERR ("expected a chan# between 1 and %d, got %s",
 	      MAX_DUMMYCHANS, p1);
@@ -3037,24 +3128,24 @@ static int process_rsvserials () {
 	 * in increasing order, so kindly ask the user to pass them in
 	 * the right order (easier for user to do than for us to fix ;-)
 	 */
-	if (rsvsn2span[i].channo <= numdummies) {
+	if (rsvsn2chan[i].channo <= numdummies) {
 	    OUFXS_ERR ("chan# %d is <= previously set %d -- ",
-	      rsvsn2span[i].channo, numdummies);
+	      rsvsn2chan[i].channo, numdummies);
 	    OUFXS_ERR ("please specify chan#'s in increasing order");
 	    retval = -EINVAL;
 	    goto rsv_finish;
 	}
-	numdummies = rsvsn2span[i].channo; /* since it is > previous one */
+	numdummies = rsvsn2chan[i].channo; /* since it is > previous one */
 
 	/* check for duplicate serials or channel numbers */
 	for (j = 0; j < i; j++) {
-	    if (!strcmp (rsvsn2span[j].serial, rsvsn2span[i].serial)) {
-		OUFXS_ERR ("duplicate serial# %s", rsvsn2span[i].serial);
+	    if (!strcmp (rsvsn2chan[j].serial, rsvsn2chan[i].serial)) {
+		OUFXS_ERR ("duplicate serial# %s", rsvsn2chan[i].serial);
 		retval = -EINVAL;
 		goto rsv_finish;
 	    }
-	    if (rsvsn2span[j].channo == rsvsn2span[i].channo) {
-		OUFXS_ERR ("duplicate channel# %d", rsvsn2span[i].channo);
+	    if (rsvsn2chan[j].channo == rsvsn2chan[i].channo) {
+		OUFXS_ERR ("duplicate channel# %d", rsvsn2chan[i].channo);
 		retval = -EINVAL;
 		goto rsv_finish;
 	    }
@@ -3102,10 +3193,9 @@ static int process_rsvserials () {
     /*
      * loop over dummy chans where:
      *   i indexes dummy{spans,chans,chps}[];
-     *   j indexes boards[];
-     *   chexpidx indexes rsvsn2span[]
+     *   j indexes boards[] and rsvsn2chan[]
      */
-    for (i = j = chexpidx = 0; i < numdummies; i++) {
+    for (i = j = 0; i < numdummies; i++) {
 
 	/* make dummychps point to the appropriate channel struct */
 	dummychps [i] = &dummychans[i];
@@ -3145,7 +3235,7 @@ static int process_rsvserials () {
 	}
 
 	/* check if the chan# returned by dahdi is the one we 're expecting*/
-	if (dummyspans[i].chans[0]->channo == rsvsn2span[chexpidx].channo) {
+	if (dummyspans[i].chans[0]->channo == rsvsn2chan[j].channo) {
 	    int channo = dummyspans[i].chans[0]->channo;
 
 	    /*
@@ -3162,12 +3252,9 @@ static int process_rsvserials () {
 		goto rsv_finish;
 	    }
 
-	    /* initialize dev (see oufxs_probe() for comments) */
-	    boards [j] = dev;
+	    /* initialize dev in part (see oufxs_probe() for comments) */
+	    boards[j] = dev;
 	    dev->slot = j;
-	    kref_init (&dev->kref);
-	    mutex_init (&dev->iomutex);
-	    spin_lock_init (&dev->statelck);
 
 	    /* do right away with dahdi stuff; leave usb stuff uninitialized */
 #if (DAHDI_VERSION_MAJOR>=2 && DAHDI_VERSION_MINOR>=3)||DAHDI_VSRSION_MAJOR>2
@@ -3176,7 +3263,7 @@ static int process_rsvserials () {
 	    dev->span.pvt = dev;
 	    safeprintf (dev->span.name, "OUFXS/rsrvd%d", i + 1);
 	    safeprintf (dev->span.desc, "Open USB FXS reserved for %s",
-	      rsvsn2span[chexpidx].serial);
+	      rsvsn2chan[j].serial);
 	    safeprintf (dev->span.location, "Not present (reserved)");
 	    dev->span.manufacturer = "Angelos Varvitsiotis";
 	    safeprintf (dev->span.devicetype, "Open USB FXS");
@@ -3202,7 +3289,7 @@ static int process_rsvserials () {
 	    dev->span.flags = DAHDI_FLAG_RBS;
 	    init_waitqueue_head (&dev->span.maintq);
 
-	    /* unregister the dummy span */
+	    /* unregister the dummy span in order to get its channel # */
 	    dahdi_unregister (&dummyspans[i]);
 	    dummyspans[i].chans = NULL;	/* so as not to re-unregister later */
 	    dummyspans[i].channels = 0;
@@ -3224,12 +3311,19 @@ static int process_rsvserials () {
 	    dev->rsrvd = 1;
 
 	    j++;
-	    chexpidx++;
 	}
-#if 0 //later... (in case someone else is already using our next-expected chan#
-	else if (dummyspans[i].chans[0]->channo > rsvsn2span[chexpidx].channo) {
+	/* either we have a bug, or someone else reserved our channel */
+	else if (dummyspans[i].chans[0]->channo > rsvsn2chan[j].channo) {
+	    OUFXS_ERR ("unable to obtain channel %d, got %d instead",
+	      rsvsn2chan[j].channo, dummyspans[i].chans[0]->channo);
+	    retval = -EBUSY;
+	    goto rsv_finish;
 	}
-#endif
+    }
+
+    for (i = 0; i < numsn2chan; i++) {
+        OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "boards[%d]=%lx", i,
+	  (unsigned long)boards[i]);
     }
 
 rsv_finish:
@@ -3261,11 +3355,12 @@ rsv_finish:
 		spin_lock_irqsave (&boardslock, flags);
 		boards[i] = NULL;
 		spin_unlock_irqrestore (&boardslock, flags);
+		if (dev->chans[0]) kfree (dev->chans[0]);
 		kfree (dev);
 	    }
 	}
-	kfree (rsvsn2span);
-	rsvsn2span = NULL;
+	kfree (rsvsn2chan);
+	rsvsn2chan = NULL;
     }
     return retval;
 }
@@ -3354,6 +3449,7 @@ static int __init oufxs_init(void)
 
     retval = process_rsvserials ();
     if (retval) {
+	OUFXS_ERR ("process_rsvserials returned %d", retval);
         goto init_finish;
     }
 
@@ -3374,17 +3470,21 @@ static void __exit oufxs_exit(void)
     unsigned long flags;
 
     usb_deregister (&oufxs_driver);
-    if (rsvsn2span) kfree (rsvsn2span);
-    rsvsn2span = NULL;
+    if (rsvsn2chan) kfree (rsvsn2chan);
+    rsvsn2chan = NULL;
 
     for (i = 0; i < OUFXS_MAX_BOARDS; i++) {
 	struct oufxs_dahdi *dev = boards[i];
 	if (dev && dev->rsrvd) {
-	    if (dev->state) continue;  /* ?? could this happen? */
+	    if (dev->state) {
+		OUFXS_ERR ("error: exiting with board %d in non-idle state!",
+		  dev->slot + 1);
+	    }
 	    dahdi_unregister (&dev->span);
 	    spin_lock_irqsave (&boardslock, flags);
 	    boards[i] = NULL;
 	    spin_unlock_irqrestore (&boardslock, flags);
+	    if (dev->chans[0]) kfree (dev->chans[0]);
 	    kfree (dev);
 	}
     }
