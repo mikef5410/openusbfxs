@@ -1,0 +1,26 @@
+*** ../dahdi-base.c.org	2010-12-05 06:07:52.000000000 +0200
+--- ../dahdi-base.c	2010-12-04 07:27:54.000000000 +0200
+***************
+*** 2710,2717 ****
+  			if (chan->span) {
+  				if (!try_module_get(chan->span->owner))
+  					res = -ENXIO;
+! 				else if (chan->span->open)
+  					res = chan->span->open(chan);
+  			}
+  			if (!res) {
+  				chan->file = file;
+--- 2710,2722 ----
+  			if (chan->span) {
+  				if (!try_module_get(chan->span->owner))
+  					res = -ENXIO;
+! 				else if (chan->span->open) {
+  					res = chan->span->open(chan);
++ 					/* avarvit */
++ 				        if (res) {
++ 						module_put(chan->span->owner);
++ 					}
++ 				}
+  			}
+  			if (!res) {
+  				chan->file = file;

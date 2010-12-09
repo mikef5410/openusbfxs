@@ -37,3 +37,15 @@ Ubuntu uses the dkms system, so you must fiddle with the
 file dkms.conf (found in /usr/src/dahdi-2.x.y.z/) and
 add the "SUBDIRS_EXTRA+=oufxs/" in the make commands in
 dkms.conf.
+
+If you are compiling against dahdi 2.3.x or 2.4.x, please
+note that the channel persistence feature triggers a bug
+in dahdi, whereby oufxs may remain locked in the kernel.
+To fix, please patch ../dahdi-base.c using the provided
+patch file dahdi-base-2.3+.patch before compiling. As of
+today (Dec. 2010), there is no official patch from Digium
+that fixes this issue. For further information and updates,
+see
+    https://issues.asterisk.org/view.php?id=18422.
+
+
