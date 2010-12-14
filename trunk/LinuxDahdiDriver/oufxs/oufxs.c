@@ -17,8 +17,8 @@
  *
  */
 
-// TODO: (a decent) version, function documentation
-static char *driverversion = "0.1-dahdi";
+// TODO: function documentation
+static char *driverversion = "0.2.1-dahdi";
 
 
 /* includes */
@@ -997,7 +997,7 @@ static void dump_direct_regs (struct oufxs_dahdi *dev, char *msg)
 	    }
 	}
 	else {
-	    sprintf (&line[8+(c<<2)], "    ");
+	    sprintf (&line[8+(c<<2)], " -- ");
 	}
 	if (c++ == 9) {
 	    OUFXS_DEBUG (OUFXS_DBGVERBOSE, "%s", line);
@@ -1021,22 +1021,22 @@ static void dump_indirect_regs (struct oufxs_dahdi *dev, char *msg)
     OUFXS_DEBUG (OUFXS_DBGVERBOSE,
       "----3210 indirect register hex dump (%s)----", msg);
     OUFXS_DEBUG (OUFXS_DBGVERBOSE,
-      "          0     1     2     3     4     5     6     7     8     9");
+      "           0    1    2    3    4    5    6    7    8    9");
 
     for (i = 0; i < 110; i++) {
 	if (c == 0) sprintf (line, "%2d0     ", i / 10);
 	if (is_valid_indirect_register (i)) {
 	    status = read_indirect (dev, i, &regval);
 	    if (status != 0) {
-		sprintf (&line[8+(c<< 2)], " XXXX\n");
+		sprintf (&line[8+(5*c)], " XXXX\n");
 		break;
 	    }
 	    else {
-		sprintf (&line[8+(c<<2)], " %04X ", regval);
+		sprintf (&line[8+(5*c)], " %04X ", regval);
 	    }
 	}
 	else {
-	    sprintf (&line[8+(c<<2)], "    ");
+	    sprintf (&line[8+(5*c)], " ----");
 	}
 	if (c++ == 9) {
 	    OUFXS_DEBUG (OUFXS_DBGVERBOSE, "%s", line);
@@ -1522,6 +1522,10 @@ static void oufxs_delete (struct kref *kr)
 	spin_lock_irqsave (&dev->statelck, flags);
 	dev->state = OUFXS_STATE_IDLE;
 	spin_unlock_irqrestore (&dev->statelck, flags);
+	dev->ep_bulk_in  = 0;
+	dev->ep_bulk_out = 0;
+	dev->ep_isoc_in  = 0;
+	dev->ep_isoc_out = 0;
 	// FIXME: set endpoints to zero to avoid warnings on re-plug
         /* do nothing else? */
 	OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: keeping dev for rsrvd serial %s",
@@ -2002,7 +2006,7 @@ init_q56cal_ok:
 	msleep (200);
     }
     OUFXS_DEBUG (OUFXS_DBGTERSE,
-      "%s: oufxs%d: longitu-dinal mode calibration OK", __func__, dev->slot + 1);
+      "%s: oufxs%d: longitudinal mode calibration OK", __func__, dev->slot + 1);
 
     OUFXS_DEBUG (OUFXS_DBGTERSE,
       "%s: oufxs%d: starting dc/dc calibration", __func__, dev->slot + 1);

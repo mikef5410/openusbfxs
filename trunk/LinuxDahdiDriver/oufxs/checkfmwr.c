@@ -29,6 +29,9 @@
 #include "oufxs.h"
 #include <usb.h>	/* this is libusb's include file */
 
+/* how many channels to fail opening before declaring end-of-work */
+#define  MAXAPART	50
+
 static char *me;	/* my own name */
 static char opt_n = 0;	/* don't program the flash, show what would be done */
 static char opt_v = 0;	/* be verbose */
@@ -1260,6 +1263,7 @@ int main (int argc, char **argv)
     int oufxscount = 0;
     int fmwrtooold = 0;
     int upgraded = 0;
+    int apart = 0;
     unsigned long serial;
     unsigned long version;
     mi_image *img = NULL;
@@ -1356,6 +1360,10 @@ int main (int argc, char **argv)
 	       * this may not be what we wanted;
 	       */
 	      case ENOENT:
+	        if (apart++ < MAXAPART) {
+		    /* silently try the next device until we reach MAXAPART */
+		    continue;
+		}
 	        fprintf (stderr,
 		  "%s: %d dahdi devices, %d oufxs boards, "
 		  "%d too old, %d upgraded\n",
@@ -1388,6 +1396,8 @@ int main (int argc, char **argv)
 	    }
 	    goto next_dahdi_dev;
 	}
+	/* reset apart, so next time we start over */
+	apart = 0;
 
 	/* try to get the board's serial number [note: the magic number
 	 * used by oufxs ioctls is not normally used by dahdi devices,
