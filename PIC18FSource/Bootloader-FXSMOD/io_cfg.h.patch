@@ -1,0 +1,69 @@
+*** io_cfg.h	2008-08-01 09:50:26.524277400 +0300
+--- io_cfg.h.org	2008-07-06 11:44:45.687500000 +0300
+***************
+*** 74,97 ****
+  /** L E D ***********************************************************/
+  /* On UBW v0.3, LED1 = RC0, LED2 = RC1, SW1 = RC2 					*/
+  
+! //#define mInitAllLEDs()      LATC &= 0xFC; TRISC &= 0xFC;
+  
+! //#define mLED_1              LATCbits.LATC0
+! //#define mLED_2              LATCbits.LATC1
+! 
+! //avarvit
+! // on my PCB, the led is on RA5
+! 
+! // avarvit
+! // damn! I forgot that numbering starts from 0 and made a mistake with the
+! // TRISA I/O mask:
+! //#define mInitAllLEDs()        LATA &= 0xE7; TRISA &= 0xE7;
+! 
+! // avarvit
+! // here it is corrected
+! #define mInitAllLEDs()        LATA &= 0xCF; TRISA &= 0xCF;
+! #define mLED_1                LATAbits.LATA5
+! #define mLED_2                LATAbits.LATA4
+  
+  #define mLED_1_On()         mLED_1 = 1;
+  #define mLED_2_On()         mLED_2 = 1;
+--- 74,83 ----
+  /** L E D ***********************************************************/
+  /* On UBW v0.3, LED1 = RC0, LED2 = RC1, SW1 = RC2 					*/
+  
+! #define mInitAllLEDs()      LATC &= 0xFC; TRISC &= 0xFC;
+  
+! #define mLED_1              LATCbits.LATC0
+! #define mLED_2              LATCbits.LATC1
+  
+  #define mLED_1_On()         mLED_1 = 1;
+  #define mLED_2_On()         mLED_2 = 1;
+***************
+*** 102,118 ****
+  #define mLED_1_Toggle()     mLED_1 = !mLED_1;
+  #define mLED_2_Toggle()     mLED_2 = !mLED_2;
+  
+- 
+  /** S W I T C H *****************************************************/
+! // #define mInitAllSwitches()  TRISCbits.TRISC2=1;
+! // #define mInitSwitch2()      TRISCbits.TRISC2=1;
+! // #define sw2                 PORTCbits.RC0
+! 
+! // avarvit
+! // on my board, the user switch is on RC6
+! #define mInitAllSwitches()  TRISCbits.TRISC2=64;
+! #define mInitSwitch2()      TRISCbits.TRISC2=64;
+! #define sw2                 PORTCbits.RC6
+  
+  #define mLED_Both_Off()         {mLED_1_Off();mLED_2_Off();}
+  #define mLED_Both_On()          {mLED_1_On();mLED_2_On();}
+--- 88,97 ----
+  #define mLED_1_Toggle()     mLED_1 = !mLED_1;
+  #define mLED_2_Toggle()     mLED_2 = !mLED_2;
+  
+  /** S W I T C H *****************************************************/
+! #define mInitAllSwitches()  TRISCbits.TRISC2=1;
+! #define mInitSwitch2()      TRISCbits.TRISC2=1;
+! #define sw2                 PORTCbits.RC0
+  
+  #define mLED_Both_Off()         {mLED_1_Off();mLED_2_Off();}
+  #define mLED_Both_On()          {mLED_1_On();mLED_2_On();}

@@ -1,0 +1,22 @@
+*** system/usb/class/boot/boot.h	2008-09-18 07:27:35.906000000 +0300
+--- system/usb/class/boot/boot.h.org	2008-09-18 07:25:22.654000000 +0300
+***************
+*** 85,94 ****
+      *   |___________________|   0x0005FFF / 0x0007FFF
+      */
+      #define RM_RESET_VECTOR             0x000800
+! // avarvit: I needed to move this to 0x820 in order to have enough space and
+! // avoid a second GOTO which eats valuable cycles
+! //    #define RM_HIGH_INTERRUPT_VECTOR    0x000808
+!     #define RM_HIGH_INTERRUPT_VECTOR    0x000820
+      #define RM_LOW_INTERRUPT_VECTOR     0x000818
+  #else
+      "Processor not supported."
+--- 85,91 ----
+      *   |___________________|   0x0005FFF / 0x0007FFF
+      */
+      #define RM_RESET_VECTOR             0x000800
+!     #define RM_HIGH_INTERRUPT_VECTOR    0x000808
+      #define RM_LOW_INTERRUPT_VECTOR     0x000818
+  #else
+      "Processor not supported."
