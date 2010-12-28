@@ -2,7 +2,7 @@ NOTE: the bootloader is based on the PICDEM FS bootloader code
 by Microchip with a few changes. Since that firmware is provided
 under copyright by Microchip, I thought it was a bad idea to
 publish its source here with my changes, claim a copyright on
-it and placing the result under GNU GPL. After all, this is not
+it and place the result under GNU GPL. After all, this is not
 exactly the reason why Microchip offer their source code: their
 aim is to help developers modify the source to adapt it to any
 other needs, such as this board here. It feels like publishing
@@ -10,7 +10,9 @@ the whole source under GPL is not just the right way to treat
 that code (and the intents of the company behind publishing it).
 
 Thus, I am just publishing here the HEX file which is the only
-thing required to get a developer up-and-running with my board.
+thing required to get a developer up-and-running with my board,
+as well as a couple of .patch files that contain my own changes 
+with respect to the original bootloader code from Microchip.
 In case anyone is interested in having a bootloader in source,
 a summary of my changes from the Microchip version is as follows:
 
@@ -38,19 +40,6 @@ a summary of my changes from the Microchip version is as follows:
 	#define RM_HIGH_INTERRUPT_VECTOR    0x000820
 
 So, if you need to have the bootloader source, you may get the
-PICDEM bootloader source, make the above changes, recompile,
+PICDEM bootloader source, make the above changes (or apply the
+patch files using a version of the patch program), recompile,
 and you are all set!
-
-Note also that, in order to be able to use the PICDEM FS tool
-as a flash programmer (over USB), I had to leave the USB
-descriptor data of the bootloader unchanged, as the ones on
-Microchip's board. As a result, a third "vendor"'s (myself)
-board (Open USB FXS) has the same USB vendor and product ids
-as another vendor's product, which is definitely not right.
-As soon as this project gets a more final state, either the
-ids will have to be changed to something identifying me as
-the vendor and the board as a product of mine (and a flash
-programmer will have to be written for it), or the PICDEM-
-compatible bootloader will have to be removed altogether.
-
--A.
