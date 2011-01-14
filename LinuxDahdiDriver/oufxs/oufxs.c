@@ -57,7 +57,6 @@ static char *driverversion = "0.2.1-dahdi";
  */
 #include <dahdi/wctdm_user.h>
 
-
 /* local #defines */
 	/* define to get HW-based DTMF detection in dev->dtmf */
 	/* (note: Asterisk does its own DTMF detection, so this
@@ -2864,8 +2863,10 @@ static int oufxs_probe (struct usb_interface *intf,
 
     /* initialize dahdi stuff */
 
+#ifdef DAHDI_VERSION_MAJOR
 #if (DAHDI_VERSION_MAJOR>=2 && DAHDI_VERSION_MINOR>=3)||DAHDI_VSRSION_MAJOR>2
     dev->span.owner = THIS_MODULE;
+#endif
 #endif
     /* back-pointer to us */
     dev->span.pvt = dev;
@@ -3213,8 +3214,10 @@ static int process_rsvserials(void) {
 	dummychans[i].pvt = NULL; // ???? what should we keep here?
 
 	/* initialize span */
+#ifdef DAHDI_VERSION_MAJOR
 #if (DAHDI_VERSION_MAJOR>=2 && DAHDI_VERSION_MINOR>=3)||DAHDI_VSRSION_MAJOR>2
 	dummyspans[i].owner = THIS_MODULE;
+#endif
 #endif
 	dummyspans[i].pvt = NULL;
 
@@ -3261,8 +3264,10 @@ static int process_rsvserials(void) {
 	    dev->slot = j;
 
 	    /* do right away with dahdi stuff; leave usb stuff uninitialized */
+#ifdef DAHDI_VERSION_MAJOR
 #if (DAHDI_VERSION_MAJOR>=2 && DAHDI_VERSION_MINOR>=3)||DAHDI_VSRSION_MAJOR>2
 	    dev->span.owner = THIS_MODULE;
+#endif
 #endif
 	    dev->span.pvt = dev;
 	    safeprintf (dev->span.name, "OUFXS/rsrvd%d", i + 1);
