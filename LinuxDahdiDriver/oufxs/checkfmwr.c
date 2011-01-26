@@ -1,6 +1,6 @@
 /*
  *  checkfmwr.c: Firmware upgrade utility for the Open USB FXS board
- *  Copyright (C) 2010  Angelos Varvitsiotis
+ *  Copyright (C) 2010  Angelos Varvitsiotis & Rockbochs, Inc.
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -15,6 +15,9 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
+ *  Acknowledgement:
+ *  The author wishes to thank Rockbochs, Inc. for their support and
+ *  for funding the development of this program.
  *
  */
 
