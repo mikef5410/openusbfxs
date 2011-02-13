@@ -26,7 +26,6 @@
 // TODO: function documentation
 static char *driverversion = "0.2.1-dahdi";
 
-
 /* includes */
 
 #include <linux/init.h>
@@ -50,6 +49,17 @@ static char *driverversion = "0.2.1-dahdi";
 #include "cmd_packet.h"
 #include "../proslic.h"
 #include "oufxs_dvsn.h"
+
+/* Do elementary environment verification */
+#if !defined (DAHDI_VERSION_MAJOR) || !defined (DAHDI_VERSION_MINOR)
+#error "DAHDI_VERSION_MAJOR or DAHDI_VERSION_MINOR is not defined!"
+#elif (DAHDI_VERSION_MAJOR!=2) ||  \
+       ((DAHDI_VERSION_MINOR!=2)&& \
+        (DAHDI_VERSION_MINOR!=3)&& \
+	(DAHDI_VERSION_MINOR!=4))
+#error "This code compiles only against Dahdi releases 2.2, 2.3 and 2.4"
+#endif
+
 
 /* dahdi-specific includes */
 #include <dahdi/kernel.h>
@@ -1431,6 +1441,35 @@ isoc_in__cbak_exit:
     return;
 }
 
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)||DAHDI_VERSION_MAJOR>2
+/* these are new in Dahdi 2.4; all "file" ops of a span are specified 
+ * in a span.ops structure; we need two of these, one for the real ops
+ * and one for the dummy ones
+ */
+static int oufxs_open (struct dahdi_chan *);
+static int oufxs_open_dummy (struct dahdi_chan *);
+static int oufxs_hooksig (struct dahdi_chan *, enum dahdi_txsig);
+static int oufxs_close (struct dahdi_chan *);
+static int oufxs_ioctl (struct dahdi_chan *, unsigned int , unsigned long);
+
+static const struct dahdi_span_ops oufxs_span_ops = {
+    .owner = THIS_MODULE,
+    .hooksig = oufxs_hooksig,
+    .open = oufxs_open,
+    .close = oufxs_close,
+    .ioctl = oufxs_ioctl,
+    // .watchdog = oufxs_watchdog,
+};
+
+static const struct dahdi_span_ops oufxs_span_ops_dummy = {
+    .owner = THIS_MODULE,
+    .hooksig = oufxs_hooksig,
+    .open = oufxs_open_dummy,
+    .close = oufxs_close,
+    .ioctl = oufxs_ioctl,
+    // .watchdog = oufxs_watchdog,
+};
+#endif
 
 
 /* destructor function: frees dev and associated memory, resets boards[] slot */
@@ -1461,10 +1500,14 @@ static void oufxs_delete (struct kref *kr)
 	  "%s: preserving reserved channel %d for serial %s",
 	  __func__, rsvsn2chan[dev->slot].channo, rsvsn2chan[dev->slot].serial);
 	/* hopefully the channel lock is still held by the caller, so
-	 * open does not risk getting called while we change its hook
+	 * open does not risk getting called while we change its hook(s)
 	 * right below
 	 */
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
         dev->span.open = oufxs_open_dummy;
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+        dev->span.ops = &oufxs_span_ops_dummy;
+#endif
 	safeprintf (dev->span.name, "OUFXS/rsrvd%d",
 	  rsvsn2chan[dev->slot].channo);
 	safeprintf (dev->span.desc, "Open USB FXS reserved for %s",
@@ -1486,7 +1529,12 @@ static void oufxs_delete (struct kref *kr)
     /* free static buffers and urbs */
     for (i = 0; i < OUFXS_MAXURB; i++) {
 	if (dev->outbufs[i].buf) {
-	    usb_buffer_free (dev->udev, OUFXS_MAXOBUFLEN,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35)
+	    usb_buffer_free (
+#else
+	    usb_free_coherent (
+#endif
+	      dev->udev, OUFXS_MAXOBUFLEN,
 	      dev->outbufs[i].buf, dev->outbufs[i].urb->transfer_dma);
 	}
 	if (dev->outbufs[i].urb) {
@@ -1494,7 +1542,12 @@ static void oufxs_delete (struct kref *kr)
 	}
 
 	if (dev->in_bufs[i].buf) {
-	    usb_buffer_free (dev->udev, OUFXS_MAXIBUFLEN,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35)
+	    usb_buffer_free (
+#else
+	    usb_free_coherent (
+#endif
+	      dev->udev, OUFXS_MAXIBUFLEN,
 	      dev->in_bufs[i].buf, dev->in_bufs[i].urb->transfer_dma);
 	}
 	if (dev->in_bufs[i].urb) {
@@ -2553,8 +2606,6 @@ ioctl_io_error:
 
 }
 
-
-
 static int oufxs_probe (struct usb_interface *intf,
   const struct usb_device_id *id)
 {
@@ -2767,7 +2818,12 @@ static int oufxs_probe (struct usb_interface *intf,
 	    goto probe_error;
 	}
 	/* allocate buffer for urb */
-	dev->outbufs[i].buf = usb_buffer_alloc (dev->udev, OUFXS_MAXOBUFLEN,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35)
+	dev->outbufs[i].buf = usb_buffer_alloc (
+#else
+        dev->outbufs[i].buf = usb_alloc_coherent (
+#endif
+	  dev->udev, OUFXS_MAXOBUFLEN,
 	  GFP_KERNEL, &dev->outbufs[i].urb->transfer_dma);
 	if (dev->outbufs[i].buf == NULL) {
 	    OUFXS_ERR (
@@ -2814,7 +2870,12 @@ static int oufxs_probe (struct usb_interface *intf,
 	    goto probe_error;
 	}
 	/* allocate buffer for urb */
-	dev->in_bufs[i].buf = usb_buffer_alloc (dev->udev, OUFXS_MAXIBUFLEN,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35)
+	dev->in_bufs[i].buf = usb_buffer_alloc (
+#else
+	dev->in_bufs[i].buf = usb_alloc_coherent (
+#endif
+	  dev->udev, OUFXS_MAXIBUFLEN,
 	  GFP_KERNEL, &dev->in_bufs[i].urb->transfer_dma);
 	if (dev->in_bufs[i].buf == NULL) {
 	    OUFXS_ERR (
@@ -2869,13 +2930,17 @@ static int oufxs_probe (struct usb_interface *intf,
 
     /* initialize dahdi stuff */
 
-#ifdef DAHDI_VERSION_MAJOR
-#if (DAHDI_VERSION_MAJOR>=2 && DAHDI_VERSION_MINOR>=3)||DAHDI_VSRSION_MAJOR>2
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==3)
+    /* exists only in 2.3 */
     dev->span.owner = THIS_MODULE;
-#endif
-#endif
-    /* back-pointer to us */
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
+    /* back-pointer to us - exists only in 2.2 and 2.3 */
     dev->span.pvt = dev;
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+    /* do nothing, owner is set via span.ops elsewhere and pvt has
+     * been removed in favor of container_of()
+     */
+#endif
     /* board identification and descriptions */
     safeprintf (dev->span.name, "OUFXS/%d", slot + 1);
     at_init_stage (dev, init_not_yet);	/* sets span.desc */
@@ -2920,15 +2985,19 @@ static int oufxs_probe (struct usb_interface *intf,
      */
     dev->span.chans = dev->chans;
     dev->span.channels = 1;
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
     dev->span.hooksig = oufxs_hooksig;
     dev->span.open = oufxs_open;
     dev->span.close = oufxs_close;
-    if (!dev->rsrvd) { /* pre-rsrvd chans already have this (and others!) set */
-	/* specify robbed bit signaling (dahdi-default) */
-	dev->span.flags = DAHDI_FLAG_RBS;
-    }
     dev->span.ioctl = oufxs_ioctl;
     // can do without it? dev->span.watchdog = oufxs_watchdog;
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+    dev->span.ops = &oufxs_span_ops;
+#endif
+    if (!dev->rsrvd) { /* pre-rsrvd chans already have this (and others!) set */
+	/* specify Robbed Bit Signaling (dahdi-default) */
+	dev->span.flags = DAHDI_FLAG_RBS;
+    }
 
     if (!dev->rsrvd) {
 	init_waitqueue_head (&dev->span.maintq);
@@ -2963,7 +3032,12 @@ probe_error:
     /* free static dma buffers and urbs */
     for (i = 0; i < OUFXS_MAXURB; i++) {
 	if (dev->outbufs[i].buf) {
-	    usb_buffer_free (dev->udev, OUFXS_MAXOBUFLEN,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35)
+	    usb_buffer_free (
+#else
+	    usb_free_coherent (
+#endif
+	      dev->udev, OUFXS_MAXOBUFLEN,
 	      dev->outbufs[i].buf, dev->outbufs[i].urb->transfer_dma);
 	}
 	if (dev->outbufs[i].urb) {
@@ -2971,7 +3045,12 @@ probe_error:
 	}
 
 	if (dev->in_bufs[i].buf) {
-	    usb_buffer_free (dev->udev, OUFXS_MAXIBUFLEN,
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,35)
+	    usb_buffer_free (
+#else
+	    usb_free_coherent (
+#endif
+	      dev->udev, OUFXS_MAXIBUFLEN,
 	      dev->in_bufs[i].buf, dev->in_bufs[i].urb->transfer_dma);
 	}
 	if (dev->in_bufs[i].urb) {
@@ -3217,15 +3296,16 @@ static int process_rsvserials(void) {
 	  DAHDI_SIG_FXOKS | DAHDI_SIG_FXOLS | DAHDI_SIG_FXOGS       |
 	  DAHDI_SIG_SF    | DAHDI_SIG_EM    | DAHDI_SIG_CLEAR; 
 	dummychans[i].chanpos = 1;
-	dummychans[i].pvt = NULL; // ???? what should we keep here?
 
 	/* initialize span */
-#ifdef DAHDI_VERSION_MAJOR
-#if (DAHDI_VERSION_MAJOR>=2 && DAHDI_VERSION_MINOR>=3)||DAHDI_VSRSION_MAJOR>2
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==3)
 	dummyspans[i].owner = THIS_MODULE;
 #endif
-#endif
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
 	dummyspans[i].pvt = NULL;
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+	/* do nothing, 2.4 uses container_of() instead of span.pvt */
+#endif
 
 	safeprintf (dummyspans[i].name, "OUFXS/tmp%d", i + 1);
 	safeprintf (dummyspans[i].desc, "Open USB FXS (temporary span)");
@@ -3236,8 +3316,12 @@ static int process_rsvserials(void) {
 	  
 	dummyspans[i].chans = &dummychps[i];
 	dummyspans[i].channels = 1;
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
 	dummyspans[i].open = oufxs_open_dummy;
 	dummyspans[i].hooksig = oufxs_hooksig;
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+        dummyspans[i].ops = &oufxs_span_ops_dummy;
+#endif
 	dummyspans[i].flags = DAHDI_FLAG_RBS; /* see probe() */
 	init_waitqueue_head (&dummyspans[i].maintq);
 
@@ -3270,12 +3354,15 @@ static int process_rsvserials(void) {
 	    dev->slot = j;
 
 	    /* do right away with dahdi stuff; leave usb stuff uninitialized */
-#ifdef DAHDI_VERSION_MAJOR
-#if (DAHDI_VERSION_MAJOR>=2 && DAHDI_VERSION_MINOR>=3)||DAHDI_VSRSION_MAJOR>2
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==3)
 	    dev->span.owner = THIS_MODULE;
 #endif
-#endif
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
+	    /* back-pointer to us */
 	    dev->span.pvt = dev;
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+	    /* do nothing, 2.4 uses container_of() instead of span.pvt */
+#endif
 	    safeprintf (dev->span.name, "OUFXS/rsrvd%d", i + 1);
 	    safeprintf (dev->span.desc, "Open USB FXS reserved for %s",
 	      rsvsn2chan[j].serial);
@@ -3299,8 +3386,12 @@ static int process_rsvserials(void) {
 
 	    dev->span.chans = dev->chans;
 	    dev->span.channels = 1;
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
 	    dev->span.open = oufxs_open_dummy;
 	    dev->span.hooksig = oufxs_hooksig;
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+	    dev->span.ops = &oufxs_span_ops_dummy;
+#endif
 	    dev->span.flags = DAHDI_FLAG_RBS;
 	    init_waitqueue_head (&dev->span.maintq);
 

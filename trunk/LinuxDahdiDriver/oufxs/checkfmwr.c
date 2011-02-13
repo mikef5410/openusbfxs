@@ -55,14 +55,6 @@ typedef struct _hex_file {
     unsigned long addr;
 } hex_file;
 
-static void usage(void);
-static void version_usage(void);
-hex_file *hex_open(FILE *f);	  /* create hex_file from already-open FILE * */
-hex_record *hex_read(hex_file *, char *); /* read the next hex_record from f  */
-
-
-/* following code copied shamelessly (and commented) from fsusb file memimg.h */
-
 /*
  * 18fx455 (not selected)
  *
@@ -137,8 +129,12 @@ typedef struct _mi_image {
 
 
 
-/* following code shamelessly copied from fsusb file "bootload.h" */
+/* various other typedefs moved here for prototypes */
+typedef struct usb_dev_handle picdem_handle;
+typedef int mi_cbak_t (picdem_handle *, int, int, mi_byte_t *, char *);
+typedef unsigned char byte;
 
+/* following code shamelessly copied from fsusb file "bootload.h" */
 
 /*
  * Command packets:
@@ -155,7 +151,6 @@ typedef struct _mi_image {
  * 0x3f: data[BL_DATA_LEN-1]
  */
 
-typedef unsigned char byte;
 
 #define BL_PACKET_LEN 64
 #define BL_HEADER_LEN  5 // command, len, low, high, upper
@@ -176,8 +171,6 @@ enum {
     RESET           = 0xFF  // Works
 };
 
-
-
 typedef union _bl_packet {
     byte _byte[64];
     struct {
@@ -193,10 +186,31 @@ typedef union _bl_packet {
 } bl_packet;
 
 
-/* following line shamelessly copied from fsusb file rjlhex.c */
 
-typedef struct usb_dev_handle picdem_handle;
 
+/* prototypes (most are mine :-) */
+static void usage(void);
+static void version_usage(void);
+hex_file *hex_open(FILE *f);	  /* create hex_file from already-open FILE * */
+hex_record *hex_read(hex_file *, char *); /* read the next hex_record from f  */
+hex_record *hex_raw_read (FILE *, char *);
+mi_patch *mi_make_patch (unsigned long, unsigned long);
+void mi_free_patch(mi_patch *);
+void mi_free_image(mi_image *);
+void mi_modify_patch (mi_patch *, int, int, mi_byte_t *);
+mi_image *mi_load_hexfile (char *);
+int mi_scan (picdem_handle *, mi_patch *, mi_cbak_t);
+int usb_send (picdem_handle *, byte *, int);
+int usb_recv (picdem_handle *, byte *, int);
+int reset_bootloader (picdem_handle *);
+int request_version (picdem_handle *, unsigned char *);
+int read_flash (picdem_handle *, int, int, bl_packet *);
+int write_block (picdem_handle *, int, byte *);
+int verify_flash (picdem_handle *, int, int, mi_byte_t *, char *);
+int program_flash (picdem_handle *, int, int, mi_byte_t *, char *);
+
+
+/* following code copied shamelessly (and commented) from fsusb file memimg.h */
 
 
 /* following code copied (and modified) from fsusb file rjlhex.c */
@@ -243,6 +257,7 @@ hex_record *hex_raw_read (FILE *f, char *error) {
     int i;
     char *p;
     unsigned char check = 0;
+    size_t ign;
 
     if (f == NULL) {
 	*error = 1;
@@ -256,7 +271,7 @@ hex_record *hex_raw_read (FILE *f, char *error) {
 	return NULL;
     }
 
-    getline (&s, &ssize, f);	/* malloc()s s, so we must free it later on */
+    ign = getline (&s, &ssize, f); /* malloc()s s, so we must free it later */
     hfline++;
 
     /* (translating from rjlhex.c), the format of a .hex file's line is
@@ -734,8 +749,6 @@ mi_image *mi_load_hexfile (char *filename) {
 
 /* following code copied and adapted from fsusb file main.c */
 
-typedef int mi_cbak_t (picdem_handle *, int, int, mi_byte_t *, char *);
-
 int mi_scan (picdem_handle *udev, mi_patch *p, mi_cbak_t cbak) {
 
     int b, i, active;
@@ -1055,6 +1068,7 @@ static int upgrade (int fd, unsigned long serial, mi_image *img) {
     unsigned long ser;		/* serial number found (ulong) */
     unsigned char buf[2];	/* for querying the bootloader version # */
 
+    dev = NULL; /* to keep gcc happy */
     fprintf (stderr,
       "  %s: looking for oufxs with serial#=%08lX\n", me, serial);
 
