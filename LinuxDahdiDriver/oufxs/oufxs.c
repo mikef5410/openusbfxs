@@ -239,6 +239,9 @@ struct oufxs_dahdi {
     struct mutex		iomutex;/* serializes I/O operations	*/
     // spinlock_t		lock;	/* generic per-card lock	*/
 
+    /* stuff related to statistics */
+    struct oufxs_errstats	errstats;
+
     /* stuff replicated from wctdm.c */
     int oldrxhook;
     int debouncehook;
@@ -1261,11 +1264,11 @@ static void oufxs_isoc_out_cbak (struct urb *urb)
 
     /* re-submit a new urb */
     ret = oufxs_isoc_out_submit (dev, GFP_ATOMIC);
-#if 0
     if (ret) {
-        //TODO: add statistics for error counting here
+	dev->errstats.lasterrop = out_err;
+	dev->errstats.errors++;
+	dev->errstats.out_lasterr = ret;
     }
-#endif
 
     /* note that this code executes once per wpacksperurb milliseconds */
 
@@ -1431,11 +1434,11 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
 
     /* re-submit a new urb */
     ret = oufxs_isoc_in__submit (dev, GFP_ATOMIC);
-#if 0
     if (ret) {
-        //TODO: add statistics for error counting here
+	dev->errstats.lasterrop = in__err;
+	dev->errstats.errors++;
+	dev->errstats.in__lasterr = ret;
     }
-#endif
 
 isoc_in__cbak_exit:
     return;
@@ -2567,6 +2570,14 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 #endif
 
 
+      case OUFXS_IOCGERRSTATS:	/* get error statistics */
+	if (copy_to_user ((__user void *) data, &dev->errstats,
+	  sizeof (struct oufxs_errstats))) {
+	    retval = -EFAULT;
+	}
+	break;
+
+
       case OUFXS_IOCGVER:	/* get firmware version */
         retval = get_fmwr_version (dev, &version);
 	if (retval == 0) {
@@ -2589,6 +2600,7 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	sscanf (dev->udev->serial, "%lx", &serial);
 	retval = __put_user (serial, (int __user *) data);
 	break;
+
 
       default:
         OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: %d", __func__, cmd);
@@ -2772,7 +2784,7 @@ static int oufxs_probe (struct usb_interface *intf,
 	    }
 	    dev->ep_isoc_out = epd->bEndpointAddress;
 	    OUFXS_DEBUG (OUFXS_DBGVERBOSE,
-	      "isoc IN  endpoint found, EP#%d, size:%ld",
+	      "isoc OUT endpoint found, EP#%d, size:%ld",
 	      dev->ep_isoc_out, (long) usbpcksize);
 	}
 

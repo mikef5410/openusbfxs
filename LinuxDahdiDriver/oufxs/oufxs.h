@@ -102,14 +102,18 @@
 #endif /* __KERNEL__ */
 
 /* returned by OUFXS_IOCGSTATS */
-struct oufxs_stats {
-    int errors;
-    enum {none, err_in, err_out} lasterrop;
+struct oufxs_errstats {
+    ulong errors;
+    enum {none, in__err, out_err} lasterrop;
+    int in__lasterr;
+    int out_lasterr;
     ulong in_overruns;
     ulong in_missed;
     ulong in_badframes;
+    ulong in_subm_failed;
     ulong out_underruns;
     ulong out_missed;
+    ulong out_subm_failed;
 };
 
 /* oufxs magic ioctl number */
@@ -128,7 +132,7 @@ struct oufxs_stats {
 /* generic event (hook state or DTMF): 0 is no event, others ??? */
 #define OUFXS_IOCGDTMF	_IOR(OUFXS_IOC_MAGIC, 5, int)
 /* get and reset statistics on errors etc. */
-#define OUFXS_IOCGSTATS	_IOR(OUFXS_IOC_MAGIC, 6, struct oufxs_stats)
+#define OUFXS_IOCGERRSTATS	_IOR(OUFXS_IOC_MAGIC, 6, struct oufxs_errstats)
 /* burn a serial number */
 #define OUFXS_IOCBURNSN	_IO(OUFXS_IOC_MAGIC, 7)
 /* reboot in bootloader mode */

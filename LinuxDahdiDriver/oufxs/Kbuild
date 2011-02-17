@@ -13,4 +13,6 @@ $(src)/oufxs_dvsn.h: $(obj)/split_dvsn
 
 hostprogs-y += checkfmwr
 hostprogs-y += split_dvsn
+hostprogs-y += oufxserrstats
 always += checkfmwr
+always += oufxserrstats

@@ -73,7 +73,7 @@ main (int argc, char **argv)
     }
 
     channo = atoi (argv[1]);
-    if (channo < 0 || channo > 999) {
+    if (channo <= 0 || channo > 999) {
 	chanusage ();
 	exit (1);
     }
