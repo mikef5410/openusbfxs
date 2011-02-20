@@ -385,6 +385,13 @@ void ServiceRequests(void) {
 		counter = 0x04;
 		break;
 
+	    case PROSLIC_RESET:
+		_reset_3210 = 0;	// reset the 3210 chip
+		for (i = 0; i < 4096; i++) ;        // wait some time
+		_reset_3210 = 1;	// set the chip to the not reset state
+		counter = 0x02;		// just echo the command back
+		break;
+	        
 	    case DEBUG_GET_CNT48:
 	    	INPacket._byte[2] = cnt4;
 		INPacket._byte[3] = cnt8;
