@@ -360,6 +360,9 @@ static struct usb_driver oufxs_driver = {
 
 /* other forward function definitions */
 
+#ifdef DO_RESET_PROSLIC
+static int proslic_reset (struct oufxs_dahdi *);
+#endif /* DO_RESET_PROSLIC */
 static int start_stop_iov2 (struct oufxs_dahdi *, __u8);
 static int read_direct (struct oufxs_dahdi *, __u8, __u8 *);
 static int write_direct (struct oufxs_dahdi *, __u8, __u8, __u8 *);
@@ -447,6 +450,59 @@ static inline void dr_write_piggyback (struct oufxs_dahdi *dev, __u8 reg,
     spin_unlock_irqrestore (&dev->outbuflock, flags);
 }
 
+#ifdef DO_RESET_PROSLIC
+static int proslic_reset (struct oufxs_dahdi *dev) {
+    union oufxs_packet req = PROSLIC_RESET_REQ();
+    union oufxs_packet rpl;
+    int outpipe = usb_sndbulkpipe (dev->udev, dev->ep_bulk_out);
+    int in_pipe = usb_rcvbulkpipe (dev->udev, dev->ep_bulk_in);
+    int length;
+    int rlngth;
+    int retval;
+
+    rlngth = sizeof(req.slicrst_req);
+    retval = usb_bulk_msg (dev->udev, outpipe, &req, rlngth, &length, 1000);
+    if (retval) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(out) returned %d", __func__, retval);
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+        return -EIO;
+    }
+    if (length != rlngth) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(out) wrote %d instead of %d bytes", __func__,
+	  length, rlngth);
+        return -EIO;
+    }
+
+    rlngth = sizeof(rpl.slicrst_rpl);
+    retval = usb_bulk_msg (dev->udev, in_pipe, &rpl, rlngth, &length, 1000);
+    if (retval) {
+	/* avoid issuing warnings on ETIMEDOUT; if board doesn't respond,
+	 * we 'll get to fill out message rings, syslog files, etc. without
+	 * any reason
+	 */
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(in) returned %d", __func__, retval);
+        return -EIO;
+    }
+    if (length != rlngth) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(in) read %d instead of %d bytes", __func__,
+	  length, rlngth);
+        return -EIO;
+    }
+    OUFXS_DEBUG (OUFXS_DBGVERBOSE,
+      "%s: SLIC chip reset successfully", __func__);
+    return 0;
+}
+#endif /* DO_RESET_PROSLIC */
+
 
 /* tell board to start/stop PCM I/O */
 static int start_stop_iov2 (struct oufxs_dahdi *dev, __u8 val)
@@ -458,7 +514,7 @@ static int start_stop_iov2 (struct oufxs_dahdi *dev, __u8 val)
     int rlngth;
     int retval;
 
-    /* version 2 of the command is used to pass an initia sequence #
+    /* version 2 of the command is used to pass an initial sequence #
      * to the board, to synchronize piggyback-based DR setting; now,
      * initialize the DR-setting stuff (since the isochronous engine
      * is not running yet, no locking of dev->outbuflock is required)
@@ -970,20 +1026,6 @@ static int sof_profile (struct oufxs_dahdi *dev)
     kfree (printbuf);
     return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 static void dump_direct_regs (struct oufxs_dahdi *dev, char *msg)
@@ -1690,6 +1732,10 @@ init_restart:
 	  dev->slot + 1);
 	return;
     }
+
+#ifdef DO_RESET_PROSLIC
+    proslic_reset (dev);
+#endif /* DO_RESET_PROSLIC */
 
     /* initialization step #1: board and ProSLIC sanity check */
     at_init_stage (dev, sanity_check);

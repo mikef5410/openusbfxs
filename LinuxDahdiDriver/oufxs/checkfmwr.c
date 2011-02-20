@@ -257,7 +257,9 @@ hex_record *hex_raw_read (FILE *f, char *error) {
     int i;
     char *p;
     unsigned char check = 0;
-    size_t ign;
+    ssize_t ign;
+
+    *error = 0;
 
     if (f == NULL) {
 	*error = 1;
@@ -286,7 +288,7 @@ hex_record *hex_raw_read (FILE *f, char *error) {
      */
 
     /* return without an error on EOF */
-    if (strlen (s) == 0) {
+    if (strlen (s) == 0 || ign <= 0) {
         free (r);
 	free (s);
 	return (NULL);
@@ -1368,7 +1370,9 @@ int main (int argc, char **argv)
     for (i = 1; ; i++) {
         snprintf (path, 64, "/dev/dahdi/%d", i);
 
-	fprintf (stderr, "  trying %s\n", path);
+	if (opt_v) {
+	    fprintf (stderr, "  trying %s\n", path);
+	}
 	if ((fd = open (path, O_RDWR)) < 0) {
 	    switch (errno) {
 	      /* caveat: the following code just exits if the next /dev/dahdi/N
@@ -1382,7 +1386,7 @@ int main (int argc, char **argv)
 		    continue;
 		}
 	        fprintf (stderr,
-		  "%s: %d dahdi devices, %d oufxs boards, "
+		  "%s: %d dahdi devices tried, %d oufxs boards found, "
 		  "%d too old, %d upgraded\n",
 		  me, i - 1, oufxscount, fmwrtooold, upgraded);
 		exit (0);
@@ -1456,6 +1460,7 @@ int main (int argc, char **argv)
 	    fprintf (stderr,
 	      "%s: unexpected error (errno: %d) while getting version\n",
 	      me, errno);
+	    perror ("");
 	    goto next_dahdi_dev;
 	}
 

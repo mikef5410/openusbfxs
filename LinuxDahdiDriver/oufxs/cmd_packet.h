@@ -22,6 +22,9 @@ enum enum_oufxs_cmd {
     PROSLIC_WDIRECT	= 0x83,		/* write direct register	*/
     PROSLIC_RDINDIR	= 0x84,		/* read indirect register	*/
     PROSLIC_WRINDIR	= 0x85,		/* write indirect register	*/
+#ifdef DO_RESET_PROSLIC
+    PROSLIC_RESET	= 0x8F,		/* reset ProSLIC		*/
+#endif /* DO_RESET_PROSLIC */
 
     RESET		= 0xFF
 };
@@ -88,6 +91,15 @@ union oufxs_packet {
 	__u8	rsv;
 	__u16	sof[15];
     }		sofprof_rpl;
+#ifdef DO_RESET_PROSLIC
+    struct {
+        __u8	cmd;
+    }		slicrst_req;
+    struct {
+        __u8	cmd;
+	__u8	rsv;
+    }		slicrst_rpl;
+#endif /* DO_RESET_PROSLIC */
 };
 
 #define GET_FXS_VERSION_REQ()		\
@@ -105,6 +117,10 @@ union oufxs_packet {
 		{.rdindir_req={.cmd=PROSLIC_RDINDIR,.reg=(r)}}
 #define	PROSLIC_WRINDIR_REQ(r,v)	\
 	  {.wrindir_req={.cmd=PROSLIC_WRINDIR,.reg=(r),.val=cpu_to_le16(v)}}
+#ifdef DO_RESET_PROSLIC
+#define PROSLIC_RESET_REQ()		\
+		{.slicrst_req={.cmd=PROSLIC_RESET}}
+#endif /* DO_RESET_PROSLIC */
 #define START_STOP_IO_REQ(v)		\
 		{.strtstp_req={.cmd=START_STOP_IO,.val=(v)}}
 #define START_STOP_IOV2_REQ(v,s)	\
