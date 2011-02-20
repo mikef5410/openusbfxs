@@ -33,8 +33,8 @@
 #define MINOR_VERSION   0x00    //Demo Version 1.00
 #define MAJOR_VERSION   0x01
 
-#define FXS_MAJOR_VERSION 0x01	// current FXS version is 1.27.00
-#define FXS_MINOR_VERSION 0x1B	//
+#define FXS_MAJOR_VERSION 0x01	// current FXS version is 1.40.00
+#define FXS_MINOR_VERSION 0x28	//
 #define FXS_REVISION_NMBR 0x00
  
 //////////////// BEGIN contributed code by avarvit
@@ -87,6 +87,7 @@ typedef enum
     PROSLIC_WDIRECT = 0x83,	// write indicated direct register
     PROSLIC_RDINDIR = 0x84,	// read indicated indirect register
     PROSLIC_WRINDIR = 0x85,	// write indicated indirect register
+    PROSLIC_RESET   = 0x8F,	// reset the proslic
 //////////////// END contributed code by avarvit
 
 
