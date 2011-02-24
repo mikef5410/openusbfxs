@@ -24,7 +24,7 @@
  */
 
 // TODO: function documentation
-static char *driverversion = "0.2.1-dahdi";
+static char *driverversion = "0.2.3-dahdi";
 
 /* includes */
 
@@ -74,15 +74,22 @@ static char *driverversion = "0.2.1-dahdi";
 #include <dahdi/wctdm_user.h>
 
 /* local #defines */
-	/* define to get HW-based DTMF detection in dev->dtmf */
-	/* (note: Asterisk does its own DTMF detection, so this
-	 * is useless for Asterisk)
-	 */
+	/* define to get HW-based DTMF detection in dev->dtmf (old) */
 #undef HWDTMF
+
+#ifndef HWDTMF
+	/* define to use dahdi-specific hardware DTMF detection */
+#define DAHDI_HWDTMF
+#endif /* HWDTMF */
+
 	/* define to get instantaneous hook state in dev->hook */
 #undef HWHOOK
+
 	/* define to print debugging messages related to seq#->buf mapping */
 #undef DEBUGSEQMAP
+
+	/* define to have the ProSLIC reset at driver loading / plug-in time */
+#undef DO_RESET_PROSLIC
 
 /* initialization macro; assumes target 's' is a char array memset to 0 */
 #define safeprintf(s, args...)	snprintf (s, sizeof(s) - 1, ## args)
@@ -230,7 +237,12 @@ struct oufxs_dahdi {
 #ifdef HWHOOK	/* superseded by hook debouncing code */
     __u8			hook;	/* 0=on-hook, 1=off-hook	*/
 #endif
+#if defined(HWDTMF)||defined(DAHDI_HWDTMF)
     __u8			dtmf;	/* 0=no dtmf, non-0=dtmf event	*/
+#endif
+#ifdef DAHDI_HWDTMF
+    __u8			dtmf_on;	/* 0 if dahdi mutes us	*/
+#endif
 
     /* locks and references */
     int				opencnt;/* number of openers		*/
@@ -333,7 +345,7 @@ static int numdummies = 0;
 
 /* tables etc. */
 
-#ifdef HWDTMF
+#if defined(HWDTMF)||defined(DAHDI_HWDTMF) 
 static char slic_dtmf_table[] = {
   'D', '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '*', '#', 'A', 'B', 'C'
 };
@@ -1437,7 +1449,7 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
 
 		// TODO: check missing mirrored sequences, incr. out_missed
 
-#ifdef HWDTMF	/* hardware DTMF detection is not used in Asterisk */
+#ifdef HWDTMF	/* old hardware DTMF detection - not used by dahdi */
 
 		/* dtmf status is bit 4 and digit is in bits 3, 2, 1 and 0 */
 		hkdtmf &= 0x1f;
@@ -1451,6 +1463,31 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
 		    dev->dtmf = 0;
 		}
 #endif	/* HWDTMF */
+#ifdef DAHDI_HWDTMF /* new hardware DTMF detection - dahdi specific */
+		hkdtmf &= 0x1f;
+		if (likely (dev->dtmf_on)) {
+		    if (unlikely (hkdtmf & 0x10)) { /* DTMF key pressed */
+			/* has the key just been pressed? */
+			if (unlikely (!(dev->dtmf & 0x10))) {
+			    dahdi_qevent_lock (dev->chans[0],
+			      DAHDI_EVENT_DTMFDOWN | 
+			      (int) slic_dtmf_table[hkdtmf & 0xf]);
+			    OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
+			      "oufxs%d DTMF digit %c", dev->slot + 1,
+			       slic_dtmf_table[hkdtmf & 0xf]);
+			}
+		    }
+		    else { /* no DTMF key pressed */
+		        /* has the key just been released? */
+			if (unlikely (dev->dtmf & 0x10)) {
+			    dahdi_qevent_lock (dev->chans[0],
+			      DAHDI_EVENT_DTMFUP |
+			      (int) slic_dtmf_table[dev->dtmf & 0xf]);
+			}
+		    }
+		}
+		dev->dtmf = hkdtmf;
+#endif
 
 		// TODO: check if we missed an input packet, update stats if so
 	    }
@@ -1719,8 +1756,11 @@ static void oufxs_setup (void *data)
 #ifdef HWHOOK
     dev->hook = 0;
 #endif
-#ifdef HWDTMF
+#if defined(HWDTMF)||defined(DAHDI_HWDTMF)
     dev->dtmf = 0;
+#endif
+#ifdef DAHDI_HWDTMF
+    dev->dtmf_on = 1;
 #endif
     spin_unlock_irqrestore (&dev->statelck, flags);
 
@@ -2518,6 +2558,26 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
 	retval = -EINVAL;
 	break;
 
+#ifdef DAHDI_HWDTMF
+      case DAHDI_TONEDETECT:
+        OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: DAHDI_TONEDETECT", __func__);
+        if (get_user (i, (__user int *) data)) {
+	    retval = -EFAULT;
+	    break;
+	}
+        OUFXS_DEBUG (OUFXS_DBGDEBUGGING, "%s: tone detect set to %d", __func__,
+	  i);
+	if (i & DAHDI_TONEDETECT_ON) {
+	    dev->dtmf_on = 1;
+	}
+	else {
+	    dev->dtmf_on = 0;
+	}
+	/* for the time, DAHDI_TONEDETECT_MUTE seems to be a mirror of
+	 * DAHDI_TONEDETECT_ON, so there's no point using it
+	 */
+	break;
+#endif
 
       /* wctdm-specific ioctls, so we can cooperate with "fxstest" */
 
