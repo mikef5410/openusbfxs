@@ -100,6 +100,12 @@ union oufxs_packet {
 	__u8	rsv;
     }		slicrst_rpl;
 #endif /* DO_RESET_PROSLIC */
+#ifdef DO_RESET_BOARD
+    struct {
+        __u8	cmd;
+    }		brdrst_req;
+    /* as you can guess, there is no reply to this... */
+#endif /* DO_RESET_BOARD */
 };
 
 #define GET_FXS_VERSION_REQ()		\
@@ -121,6 +127,10 @@ union oufxs_packet {
 #define PROSLIC_RESET_REQ()		\
 		{.slicrst_req={.cmd=PROSLIC_RESET}}
 #endif /* DO_RESET_PROSLIC */
+#ifdef DO_RESET_BOARD
+#define BOARD_RESET_REQ()		\
+		{.brdrst_req={.cmd=RESET}}
+#endif /* DO_RESET_BOARD */
 #define START_STOP_IO_REQ(v)		\
 		{.strtstp_req={.cmd=START_STOP_IO,.val=(v)}}
 #define START_STOP_IOV2_REQ(v,s)	\
