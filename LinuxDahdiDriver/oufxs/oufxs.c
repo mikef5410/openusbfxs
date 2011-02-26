@@ -46,7 +46,6 @@ static char *driverversion = "0.2.3-dahdi";
 
 /* Open USB FXS - specific includes */
 #include "oufxs.h"
-#include "cmd_packet.h"
 #include "../proslic.h"
 #include "oufxs_dvsn.h"
 
@@ -74,6 +73,8 @@ static char *driverversion = "0.2.3-dahdi";
 #include <dahdi/wctdm_user.h>
 
 /* local #defines */
+
+/* configuration defines; adjust to your needs (must know what you are doing) */
 	/* define to get HW-based DTMF detection in dev->dtmf (old) */
 #undef HWDTMF
 
@@ -90,6 +91,14 @@ static char *driverversion = "0.2.3-dahdi";
 
 	/* define to have the ProSLIC reset at driver loading / plug-in time */
 #undef DO_RESET_PROSLIC
+
+	/* define to make board reset functionality available through ioctl */
+#define DO_RESET_BOARD
+
+/* end of user-fiddleable configuration defines */
+
+/* include (config-define-dependent) USB command packet definitions */
+#include "cmd_packet.h"
 
 /* initialization macro; assumes target 's' is a char array memset to 0 */
 #define safeprintf(s, args...)	snprintf (s, sizeof(s) - 1, ## args)
@@ -148,6 +157,9 @@ static int reversepolarity = 0;			/* use reversed polarity */
 static int loopcurrent = 20;			/* loop current */
 static int lowpower = 0;			/* set on-hook voltage to 24V */
 static int hifreq = 1;				/* ~80kHz, for L1=100uH */
+static int hwdtmf = 1;				/* detect DTMF in hardware */
+static int fxstxgain = 0;			/* analog TX gain, see code */
+static int fxsrxgain = 0;			/* analog RX gain, see code */
 #ifdef DEBUGSEQMAP
 static int complaintimes = 0;			/* how many times to complain */
 #endif	/* DEBUGSEQMAP */
@@ -169,6 +181,9 @@ module_param(reversepolarity, int, S_IWUSR|S_IRUGO);
 module_param(loopcurrent, int, S_IWUSR|S_IRUGO);
 module_param(lowpower, int, S_IWUSR|S_IRUGO);
 module_param(hifreq, int, S_IWUSR|S_IRUGO);
+module_param(hwdtmf, int, S_IWUSR|S_IRUGO);
+module_param(fxstxgain, int, S_IWUSR|S_IRUGO);
+module_param(fxsrxgain, int, S_IWUSR|S_IRUGO);
 #ifdef DEBUGSEQMAP
 module_param(complaintimes, int, S_IWUSR|S_IRUGO);
 #endif	/* DEBUGSEQMAP */
@@ -375,6 +390,9 @@ static struct usb_driver oufxs_driver = {
 #ifdef DO_RESET_PROSLIC
 static int proslic_reset (struct oufxs_dahdi *);
 #endif /* DO_RESET_PROSLIC */
+#ifdef DO_RESET_BOARD
+static int board_reset (struct oufxs_dahdi *);
+#endif /* DO_RESET_BOARD */
 static int start_stop_iov2 (struct oufxs_dahdi *, __u8);
 static int read_direct (struct oufxs_dahdi *, __u8, __u8 *);
 static int write_direct (struct oufxs_dahdi *, __u8, __u8, __u8 *);
@@ -515,6 +533,34 @@ static int proslic_reset (struct oufxs_dahdi *dev) {
 }
 #endif /* DO_RESET_PROSLIC */
 
+#ifdef DO_RESET_BOARD
+static int board_reset (struct oufxs_dahdi *dev) {
+    union oufxs_packet req = BOARD_RESET_REQ();
+    int outpipe = usb_sndbulkpipe (dev->udev, dev->ep_bulk_out);
+    int length;
+    int rlngth;
+    int retval;
+
+    rlngth = sizeof(req.brdrst_req);
+    retval = usb_bulk_msg (dev->udev, outpipe, &req, rlngth, &length, 1000);
+    if (retval) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(out) returned %d", __func__, retval);
+	if (retval == -ETIMEDOUT) {
+	    return retval;
+	}
+        return -EIO;
+    }
+    if (length != rlngth) {
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: usb_bulk_msg(out) wrote %d instead of %d bytes", __func__,
+	  length, rlngth);
+        return -EIO;
+    }
+
+    return 0;
+}
+#endif /* DO_RESET_BOARD */
 
 /* tell board to start/stop PCM I/O */
 static int start_stop_iov2 (struct oufxs_dahdi *dev, __u8 val)
@@ -966,6 +1012,7 @@ static int is_valid_indirect_register (const __u8 b)
 {
     if (b <= 43) return true;
     if (b >= 99 && b <= 104) return true;
+    /* scratchpad?? */ if (b == 97) return true;
     return false;
 }
 
@@ -1464,29 +1511,31 @@ static void oufxs_isoc_in__cbak (struct urb *urb)
 		}
 #endif	/* HWDTMF */
 #ifdef DAHDI_HWDTMF /* new hardware DTMF detection - dahdi specific */
-		hkdtmf &= 0x1f;
-		if (likely (dev->dtmf_on)) {
-		    if (unlikely (hkdtmf & 0x10)) { /* DTMF key pressed */
-			/* has the key just been pressed? */
-			if (unlikely (!(dev->dtmf & 0x10))) {
-			    dahdi_qevent_lock (dev->chans[0],
-			      DAHDI_EVENT_DTMFDOWN | 
-			      (int) slic_dtmf_table[hkdtmf & 0xf]);
-			    OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
-			      "oufxs%d DTMF digit %c", dev->slot + 1,
-			       slic_dtmf_table[hkdtmf & 0xf]);
+		if (hwdtmf) {
+		    hkdtmf &= 0x1f;
+		    if (likely (dev->dtmf_on)) {
+			if (unlikely (hkdtmf & 0x10)) { /* DTMF key pressed */
+			    /* has the key just been pressed? */
+			    if (unlikely (!(dev->dtmf & 0x10))) {
+				dahdi_qevent_lock (dev->chans[0],
+				  DAHDI_EVENT_DTMFDOWN | 
+				  (int) slic_dtmf_table[hkdtmf & 0xf]);
+				OUFXS_DEBUG (OUFXS_DBGDEBUGGING,
+				  "oufxs%d DTMF digit %c", dev->slot + 1,
+				   slic_dtmf_table[hkdtmf & 0xf]);
+			    }
+			}
+			else { /* no DTMF key pressed */
+			    /* has the key just been released? */
+			    if (unlikely (dev->dtmf & 0x10)) {
+				dahdi_qevent_lock (dev->chans[0],
+				  DAHDI_EVENT_DTMFUP |
+				  (int) slic_dtmf_table[dev->dtmf & 0xf]);
+			    }
 			}
 		    }
-		    else { /* no DTMF key pressed */
-		        /* has the key just been released? */
-			if (unlikely (dev->dtmf & 0x10)) {
-			    dahdi_qevent_lock (dev->chans[0],
-			      DAHDI_EVENT_DTMFUP |
-			      (int) slic_dtmf_table[dev->dtmf & 0xf]);
-			}
-		    }
+		    dev->dtmf = hkdtmf;
 		}
-		dev->dtmf = hkdtmf;
 #endif
 
 		// TODO: check if we missed an input packet, update stats if so
@@ -1884,7 +1933,7 @@ init_restart:
     ir_write (sts, 39, 0x8000, irval, init_restart); /* thermal LP pole Q4Q5 */
     ir_write (sts, 40, 0x0000, irval, init_restart); /* cmmode bias ringing */
     ir_write (sts, 41, 0x0c00, irval, init_restart); /* DC-DC conv. min. volt.*/
-    /* ?? marked as "reserved" in si3210 manual, but seen elsewhere to be set
+    /* ?? marked as "reserved" in si3210 manual, but seen in wctdm.c to be set
      * to 0x1000 as "DC-DC extra" (extra what?); anyway, it's commented out here
     ir_write (sts, 42, 0x1000, irval, init_restart); */
     ir_write (sts, 43, 0x1000, irval, init_restart); /* loop close thres. low */
@@ -1896,7 +1945,8 @@ init_restart:
     dr_write_check (sts, 108, 0xeb, drval, init_restart); /* rev.E features */
     dr_write (sts, 66, 0x01, drval, init_restart); /* Vov=low, Vbat~Vring */
     /* following six parameter values taken from SiLabs Excel formula sheet
-     * (with a fixed inductor value of 100uH, NREN=1, dist=1000)
+     * (with a fixed inductor value of 100uH, NREN=1, dist=1000 - hifreq==0
+     *  values are for an inductor of 150uH and identical NREN/dist)
      */
     if (hifreq) {
         dr_write_check (sts, 92, 202, drval, init_restart); /* period=12.33us */
@@ -2176,7 +2226,7 @@ init_q56cal_ok:
     for (j = 88; j <= 95; j++) {
         ir_write (sts, j, 0, irval, init_restart);
     }
-    ir_write (sts, 97, 0, irval, init_restart);
+    ir_write (sts, 97, 0, irval, init_restart); /* scratchpad (??) */
     for (j = 194; j <= 211; j++) {
         ir_write (sts, j, 0, irval, init_restart);
     }
@@ -2186,7 +2236,13 @@ init_q56cal_ok:
     dr_write (sts, 19, 0xff, drval, init_restart);
     dr_write (sts, 20, 0xff, drval, init_restart);
 
-    /* enable selected interrupts */
+    /* enable selected interrupts; dr21 contains various timer inactive
+     * interrupts that we don't use; dr22 contains all power alarm
+     * interrupts (Q1..Q6) plus the loop closure/ring trip interrupts
+     * that we use; dr23 contains the dtmf detection interrupt that we
+     * use and two others (calibration error and indirect register
+     * access ready) that we don't
+     */
     dr_write_check (sts, 21, 0x00, drval, init_restart); /* none here */
     dr_write_check (sts, 22, 0xff, drval, init_restart); /* all here */
     dr_write_check (sts, 23, 0x01, drval, init_restart); /* only dtmf here */
@@ -2228,7 +2284,7 @@ init_q56cal_ok:
     dr_write_check (sts, 2, 0x01, drval, init_restart);	/* txs lowb set to 1 */
     dr_write_check (sts, 4, 0x01, drval, init_restart); /* rxs lowb set to 1 */
 
-    /* fix low-power mode: on-hook voltage = 24V, ringer voltage = 50V */
+    /* set low-power mode: on-hook voltage = 24V, ringer voltage = 50V */
     if (lowpower) {
 	OUFXS_INFO ("%s: oufxs%d is being put in low-power mode", __func__,
 	  dev->slot + 1);
@@ -2237,6 +2293,45 @@ init_q56cal_ok:
     }
     
     // TODO: add gain fixups and respective DR9 adjustments
+    if (fxstxgain || fxsrxgain) {
+	__u8 dr9;
+	char *txg="<invalid>", *rxg="<invalid>";
+        dr_read (sts, 9, dr9, init_restart); /* read sensed voltage */
+	switch (fxstxgain) {
+	  case 35:
+	    dr9 = (dr9 & 0xf3) | 0x08; txg = "+3.5 dB";
+	    break;
+	  case -35:
+	    dr9 = (dr9 & 0xf3) | 0x04; txg = "-3.5 dB";
+	    break;
+	  case 0:
+            txg = "0.0 dB";
+	    break;
+	  default:
+	    OUFXS_WARN ("%s: invalid fxstxgain %d, valid are -35, 0 and 35",
+	      __func__, fxstxgain);
+	    break;
+	}
+	switch (fxsrxgain) {
+	  case 35:
+	    dr9 = (dr9 & 0xfc) | 0x02; rxg = "+3.5 dB";
+	    break;
+	  case -35:
+	    dr9 = (dr9 & 0xfc) | 0x01; rxg = "-3.5 dB";
+	    break;
+	  case 0:
+            rxg = "0.0 dB";
+	    break;
+	  default:
+	    OUFXS_WARN ("%s: invalid fxsrxgain %d, valid are -35, 0 and 35",
+	      __func__, fxstxgain);
+	    break;
+	}
+        dr_write (sts, 9, dr9, drval, init_restart);	/* set gain */
+	OUFXS_DEBUG (OUFXS_DBGTERSE,
+	  "%s: oufxs%d set to fxstxgain: %s, fxsrxgain: %s", __func__,
+	  dev->slot + 1, txg, rxg);
+    }
 
     /* set default hook state mode (fwd/reverse active) */
     dev->idletxhookstate = (reversepolarity ^ dev->reversepolarity)?
@@ -2631,10 +2726,14 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
       /* OUFXS-specific ioctls */
 
       case OUFXS_IOCRESET:	/* reset the board (unimplemented) */
-        OUFXS_WARN ("%s: OUFXS_IOCRESET is not yet implemented", __func__);
+#ifdef DO_RESET_BOARD
+        retval = board_reset (dev);
+#else
+	OUFXS_WARN ("%s: oufxs%d: OUFXS_IOCRESET is unimplemented", __func__,
+	  dev->slot + 1);
 	retval = -ENOTTY;
+#endif /* DO_RESET_BOARD */
 	break;
-
 
       case OUFXS_IOCREGDMP:	/* cause a register dump to be kprintf'ed */
 	dump_direct_regs (dev, "ioctl-requested");
@@ -2700,7 +2799,6 @@ static int oufxs_ioctl (struct dahdi_chan *chan, unsigned int cmd,
       case OUFXS_IOCBOOTLOAD:	/* reboot in bootloader mode */
         retval = reboot_bootload (dev);
 	break;
-
 
       case OUFXS_IOCGSN:	/* get the current serial number */
 	sscanf (dev->udev->serial, "%lx", &serial);
