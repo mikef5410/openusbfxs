@@ -680,9 +680,10 @@ void USBCBInitEP(void)
     //test
     //USBEnableEndpoint(2,USB_OUT_ENABLED|USB_IN_ENABLED|USB_HANDSHAKE_ENABLED|USB_DISALLOW_SETUP);
     USBEnableEndpoint(2,USB_OUT_ENABLED|USB_IN_ENABLED|USB_HANDSHAKE_DISABLED|USB_DISALLOW_SETUP);
-    // avarvit: see note above about "arming" a read
+    // avarvit: see note above about "arming" a read; here we "arm" a receive
+    // (usb OUT operation) for EP 2, which is our isochronous OUT endpoint
     USBIsoOutHandle = USBGenRead(2,OUTPCMData0,16);
-#endif // (USB_MAX_EP_NUMBER==2)
+#endif // (USB_MAX_EP_NUMBER>=2)
 }
 
 /********************************************************************

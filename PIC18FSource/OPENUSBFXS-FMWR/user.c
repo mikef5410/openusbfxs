@@ -124,6 +124,8 @@ void UserInit(void) {
     // fix interrupts
     INTCONbits.GIE = 0;                 // temporarily disable interrupts
     RCONbits.IPEN = 0;                  // disable interrupt priorities
+  // testing...
+    RCONbits.NOT_BOR = 1;		// initialize to a non-BOR condition
     // set to 1 later on
     // INTCONbits.PEIE = 0;		// disable periferal interrupts
     INTCONbits.TMR0IE = 0;		// disable timer0 interrupts
@@ -256,7 +258,10 @@ void ProcessIO(void)
 
     // provide DR setting capability via isochronous packets; sequence
     // number for DR setting operation, register # and register value
-    // are contained in packet headers
+    // are contained in packet headers; we trust that each sequence
+    // will be repeated for a number of packets, so we can just sample
+    // "even" packets; we act upon changes in the direct register setting
+    // sequence number (drsseq) and set the DR appropriately
     if (drsena) {
 	// quickly sample just OUT_0 packet for sequence number changes
 	if (*((BYTE *) OUT_0_DRSSEQ) != drsseq) { // !=, or we risk missing data
@@ -280,6 +285,12 @@ void ProcessIO(void)
 		}
 	    }
 	}
+    }
+    
+    // check for BOR and other conditions
+    if (isBOR()) {
+        BYTE *bp = (BYTE *) IN_EVN_BORETC;
+	*bp = 0xBB;
     }
 
     //respond to any USB commands that might have come over the bus
