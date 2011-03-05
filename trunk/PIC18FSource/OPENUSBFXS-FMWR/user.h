@@ -33,9 +33,9 @@
 #define MINOR_VERSION   0x00    //Demo Version 1.00
 #define MAJOR_VERSION   0x01
 
-#define FXS_MAJOR_VERSION 0x01	// current FXS version is 1.40.00
-#define FXS_MINOR_VERSION 0x28	//
-#define FXS_REVISION_NMBR 0x00
+#define FXS_MAJOR_VERSION 0x01	// current FXS version is 1.46.01
+#define FXS_MINOR_VERSION 0x2E	//
+#define FXS_REVISION_NMBR 0x01
  
 //////////////// BEGIN contributed code by avarvit
 // /* Temperature Mode */
