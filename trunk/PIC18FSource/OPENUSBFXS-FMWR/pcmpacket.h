@@ -25,7 +25,7 @@
 #define IN_ODD_HKDTMF	IN_PCMData1 + 2
 #define IN_EVN_MOUTSN	IN_PCMData0 + 3
 #define IN_ODD_MOUTSN	IN_PCMData1 + 3
-#define IN_EVN_UNUSD4	IN_PCMData0 + 4
+#define IN_EVN_BORETC	IN_PCMData0 + 4
 #define IN_ODD_TMR3LV	IN_PCMData1 + 4
 #define IN_EVN_UNUSD5	IN_PCMData0 + 5
 #define IN_ODD_TMR3HV	IN_PCMData1 + 5
