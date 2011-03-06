@@ -35,7 +35,7 @@
 
 #define FXS_MAJOR_VERSION 0x01	// current FXS version is 1.46.01
 #define FXS_MINOR_VERSION 0x2E	//
-#define FXS_REVISION_NMBR 0x01
+#define FXS_REVISION_NMBR 0x0F
  
 //////////////// BEGIN contributed code by avarvit
 // /* Temperature Mode */
