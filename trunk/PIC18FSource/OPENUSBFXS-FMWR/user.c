@@ -72,7 +72,6 @@ extern BYTE IN_PCMData1[16];
 
 void BlinkUSBStatus(void);
 BOOL Switch2IsPressed(void);
-void ResetTempLog(void);
 WORD_VAL ReadPOT(void);
 void ServiceRequests(void);
 
@@ -87,6 +86,10 @@ void UserInit(void) {
 //////////////// BEGIN contributed code by avarvit
     
     unsigned short i;			// general-purpose counter
+    BYTE *bp = (BYTE *) IN_EVN_STATUS;
+
+    // tell others we have just reset
+    *bp = 0;
 
     // designate appropriately various pins as input or output
 
@@ -124,8 +127,7 @@ void UserInit(void) {
     // fix interrupts
     INTCONbits.GIE = 0;                 // temporarily disable interrupts
     RCONbits.IPEN = 0;                  // disable interrupt priorities
-  // testing...
-    RCONbits.NOT_BOR = 1;		// initialize to a non-BOR condition
+
     // set to 1 later on
     // INTCONbits.PEIE = 0;		// disable periferal interrupts
     INTCONbits.TMR0IE = 0;		// disable timer0 interrupts
@@ -287,12 +289,6 @@ void ProcessIO(void)
 	}
     }
     
-    // check for BOR and other conditions
-    if (isBOR()) {
-        BYTE *bp = (BYTE *) IN_EVN_BORETC;
-	*bp = 0xBB;
-    }
-
     //respond to any USB commands that might have come over the bus
     ServiceRequests();
 
@@ -464,7 +460,7 @@ void ServiceRequests(void) {
 		    IN_PCMData1[2] = 0;		// DTMF and hook state
 		    IN_PCMData0[3] = 0;		// USB_DEBUG?mirrored serial OUT
 		    IN_PCMData1[3] = 0;		// USB_DEBUG?mirrored serial OUT
-		    IN_PCMData0[4] = 0;		// (unused on even packets)
+		    // IN_PCMData0[4] = 0;	// STATUS (do not clear this)
 		    IN_PCMData1[4] = 0;		// USB_DEBUG? TMR3L
 		    IN_PCMData0[5] = 0;		// (unused on even packets)
 		    IN_PCMData1[5] = 0;		// USB_DEBUG? TMR3H

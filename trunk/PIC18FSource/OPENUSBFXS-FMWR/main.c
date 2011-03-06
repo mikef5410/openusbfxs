@@ -24,7 +24,13 @@
 #include "USB/usb_function_generic.h"
 #include "usb_config.h"
 #include "user.h"                              // Modifiable
+
+//////////////// BEGIN contributed code by avarvit
 #include "eeprom.h"
+#include "pcmpacket.h"
+extern BYTE IN_PCMData0[16];
+extern BYTE IN_PCMData1[16];
+//////////////// END contributed code by avarvit
 
 /** CONFIGURATION **************************************************/
 // Configuration bits for Open USB FXS board
@@ -377,6 +383,10 @@ void USBCBSuspend(void)
 	// OPENUSBFXS-TODO: I have to make sure that the board does not
 	// draw current in this state; a strategy might be to put the PIC
 	// to sleep.
+
+	// avarvit: report suspended on next even packet(s)
+	BYTE *bp = (BYTE *) IN_EVN_STATUS;
+	*bp = 0x55;
 }
 
 
@@ -439,6 +449,13 @@ void USBCBWakeFromSuspend(void)
 
 	// OPENUSBFXS-TODO: probably it is a good idea to reset everything
 	// after a suspend
+
+	// avarvit: if we wakeup and have already initialized, do a reset
+	BYTE *bp = (BYTE *) IN_EVN_STATUS;
+	if (*bp > 0xAA) {
+	    Reset();
+	}
+	*bp = 0xAA;
 }
 
 /********************************************************************
@@ -606,6 +623,8 @@ void USBCBErrorHandler(void)
 	
 	// Nevertheless, this callback function is provided, such as
 	// for debugging purposes.
+	BYTE *bp = (BYTE *) IN_EVN_STATUS;
+	*bp = 0xEE;
 }
 
 
@@ -671,6 +690,14 @@ void USBCBStdSetDscHandler(void)
  *****************************************************************************/
 void USBCBInitEP(void)
 {
+
+    // avarvit: count SET_CONFIGURATIONs sent, reset if re-configuring
+    BYTE *bp = (BYTE *) IN_EVN_STATUS;
+    (*bp)++;
+    if (*bp > 0xAB) {
+        Reset ();
+    }
+    
     USBEnableEndpoint(USBGEN_EP_NUM,USB_OUT_ENABLED|USB_IN_ENABLED|USB_HANDSHAKE_ENABLED|USB_DISALLOW_SETUP);
     // avarvit: this read "arms" the receiver so that it becomes
     // ready to receive any frame that the USB host sends to the EP
