@@ -55,8 +55,9 @@ static char *driverversion = "0.2.3-dahdi";
 #elif (DAHDI_VERSION_MAJOR!=2) ||  \
        ((DAHDI_VERSION_MINOR!=2)&& \
         (DAHDI_VERSION_MINOR!=3)&& \
-	(DAHDI_VERSION_MINOR!=4))
-#error "This code compiles only against Dahdi releases 2.2, 2.3 and 2.4"
+	(DAHDI_VERSION_MINOR!=4)&& \
+	(DAHDI_VERSION_MINOR!=5))
+#error "This code compiles only against Dahdi releases 2.2, 2.3, 2.4 and 2.5"
 #endif
 
 
@@ -1572,7 +1573,7 @@ isoc_in__cbak_exit:
     return;
 }
 
-#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)||DAHDI_VERSION_MAJOR>2
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)
 /* these are new in Dahdi 2.4; all "file" ops of a span are specified 
  * in a span.ops structure; we need two of these, one for the real ops
  * and one for the dummy ones
@@ -1636,7 +1637,7 @@ static void oufxs_delete (struct kref *kr)
 	 */
 #if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
         dev->span.open = oufxs_open_dummy;
-#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)
         dev->span.ops = &oufxs_span_ops_dummy;
 #endif
 	safeprintf (dev->span.name, "OUFXS/rsrvd%d",
@@ -3009,11 +3010,17 @@ static int oufxs_probe (struct usb_interface *intf,
     /* tell to the power management of the kernel USB core that we don't
      * want to have the device autosuspended
      */
+    /*
+    // for some reason, this call fails with -EACCESS on kernels 3.x (verified
+    // with 3.5); re-reading the documentation shows that this call may be
+    // superfluous, since our driver does not (yet) define .suspend/.resume/
+    // .reset_resume methods
     retval = usb_autopm_get_interface (intf);
     if (retval) {
         OUFXS_ERR ("call to autopm_get_interface failed with %d", retval);
 	goto probe_error;
     }
+    */
 
     /* save back-pointer to our oufxs_dahdi structure within usb interface */
     usb_set_intfdata (intf, dev);
@@ -3152,7 +3159,7 @@ static int oufxs_probe (struct usb_interface *intf,
 #elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
     /* back-pointer to us - exists only in 2.2 and 2.3 */
     dev->span.pvt = dev;
-#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)
     /* do nothing, owner is set via span.ops elsewhere and pvt has
      * been removed in favor of container_of()
      */
@@ -3207,7 +3214,7 @@ static int oufxs_probe (struct usb_interface *intf,
     dev->span.close = oufxs_close;
     dev->span.ioctl = oufxs_ioctl;
     // can do without it? dev->span.watchdog = oufxs_watchdog;
-#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)
     dev->span.ops = &oufxs_span_ops;
 #endif
     if (!dev->rsrvd) { /* pre-rsrvd chans already have this (and others!) set */
@@ -3216,7 +3223,11 @@ static int oufxs_probe (struct usb_interface *intf,
     }
 
     if (!dev->rsrvd) {
+
+	/* maintq has been removed in dahdi v2.5 */
+#if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<5)
 	init_waitqueue_head (&dev->span.maintq);
+#endif
 	retval = dahdi_register (&dev->span, 0);
 	if (retval) {
 	    OUFXS_ERR ("unable to register span with dahdi");
@@ -3308,7 +3319,11 @@ static void oufxs_disconnect (struct usb_interface *intf)
     slot = dev->slot;
 
     /* tell USB core's power mgmt we don't need autosuspend turned off */
+    /*
+    // fails with kernels 3.x and may anyway be the wrong way to deal with
+    // the kernel's power management features
     usb_autopm_put_interface (intf);
+    */
 
     /* set state to UNLOAD, so others will see it */
     spin_lock_irqsave (&dev->statelck, flags);
@@ -3519,7 +3534,7 @@ static int process_rsvserials(void) {
 #endif
 #if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
 	dummyspans[i].pvt = NULL;
-#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)
 	/* do nothing, 2.4 uses container_of() instead of span.pvt */
 #endif
 
@@ -3535,11 +3550,13 @@ static int process_rsvserials(void) {
 #if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
 	dummyspans[i].open = oufxs_open_dummy;
 	dummyspans[i].hooksig = oufxs_hooksig;
-#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)
         dummyspans[i].ops = &oufxs_span_ops_dummy;
 #endif
 	dummyspans[i].flags = DAHDI_FLAG_RBS; /* see probe() */
+#if (DAHDI_VERSION_MINOR<5)	/* maintq has been removed in dahdi v2.5 */
 	init_waitqueue_head (&dummyspans[i].maintq);
+#endif
 
 	retval = dahdi_register (&dummyspans[i], 0);
 	if (retval) {
@@ -3576,7 +3593,7 @@ static int process_rsvserials(void) {
 #if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
 	    /* back-pointer to us */
 	    dev->span.pvt = dev;
-#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)
 	    /* do nothing, 2.4 uses container_of() instead of span.pvt */
 #endif
 	    safeprintf (dev->span.name, "OUFXS/rsrvd%d", i + 1);
@@ -3605,11 +3622,13 @@ static int process_rsvserials(void) {
 #if (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR<4)
 	    dev->span.open = oufxs_open_dummy;
 	    dev->span.hooksig = oufxs_hooksig;
-#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR==4)
+#elif (DAHDI_VERSION_MAJOR==2 && DAHDI_VERSION_MINOR>=4)
 	    dev->span.ops = &oufxs_span_ops_dummy;
 #endif
 	    dev->span.flags = DAHDI_FLAG_RBS;
+#if (DAHDI_VERSION_MINOR<5)	/* maintq has been removed in dahdi v2.5 */
 	    init_waitqueue_head (&dev->span.maintq);
+#endif
 
 	    /* unregister the dummy span in order to get its channel # */
 	    dahdi_unregister (&dummyspans[i]);
