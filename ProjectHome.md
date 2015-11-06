@@ -1,0 +1,3 @@
+Open USB FXS is a project that offering to the community an open-hardware/open-software FXS board. The target mass-scale manufacturing cost is in the order of US $10.00, this low-cost being a critical overall design factor. The board communicates to a host using USB. The board is recognized by Asterisk as a Dahdi device, and this project contains the respective drivers.
+
+The board is built around two chips: a Silabs 3210, that implements all telephony functions, and a PIC (a 18F2550 for the time) that interfaces between the 3210 and the USB and implements the board's routine tasks, like passing around PCM I/O data. All the intelligence lies on the PC side, which drives the board by setting registers on the 3210 and performs audio I/O.
